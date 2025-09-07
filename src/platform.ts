@@ -1,4 +1,12 @@
-import type { API, Characteristic, DynamicPlatformPlugin, Logging, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
+import type {
+  API,
+  Characteristic,
+  DynamicPlatformPlugin,
+  Logging,
+  PlatformAccessory,
+  PlatformConfig,
+  Service,
+} from 'homebridge';
 
 import { SchneiderBLELampsAccessory } from './platformAccessory.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
@@ -19,10 +27,10 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
   // this is used to track restored cached accessories
   public readonly accessories: Map<string, PlatformAccessory> = new Map();
   public readonly discoveredCacheUUIDs: string[] = [];
-  
+
   // BLE controller for handling device communication
   public readonly bleController: BLEController;
-  
+
   // Map to store peripherals by address to avoid circular references
   private readonly peripheralsByAddress: Map<string, unknown> = new Map();
 
@@ -55,30 +63,46 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
     // to start discovery of new accessories.
     this.api.on('didFinishLaunching', async () => {
       log.debug('Executed didFinishLaunching callback');
-      
+
       try {
         // Initialize BLE controller
         await this.bleController.init();
         this.log.info('BLE controller initialized successfully');
-        
+
         // Configure BLE controller with user settings
         const autoReconnect = (this.config.autoReconnect as boolean) ?? true;
-        const maxReconnectionAttempts = (this.config.maxReconnectionAttempts as number) ?? 10;
-        const connectionMonitorInterval = (this.config.connectionMonitorInterval as number) ?? 10;
-        const initialReconnectionDelay = (this.config.initialReconnectionDelay as number) ?? 1000;
-        
+        const maxReconnectionAttempts =
+          (this.config.maxReconnectionAttempts as number) ?? 10;
+        const connectionMonitorInterval =
+          (this.config.connectionMonitorInterval as number) ?? 10;
+        const initialReconnectionDelay =
+          (this.config.initialReconnectionDelay as number) ?? 1000;
+
         this.bleController.setAutoReconnect(autoReconnect);
         this.bleController.setMaxReconnectionAttempts(maxReconnectionAttempts);
-        this.bleController.setConnectionMonitorInterval(connectionMonitorInterval);
-        this.bleController.setInitialReconnectionDelay(initialReconnectionDelay);
-        
-        this.log.info(`BLE controller configured: autoReconnect=${autoReconnect}, maxAttempts=${maxReconnectionAttempts}, monitorInterval=${connectionMonitorInterval}s, initialDelay=${initialReconnectionDelay}ms`);
-        
+        this.bleController.setConnectionMonitorInterval(
+          connectionMonitorInterval,
+        );
+        this.bleController.setInitialReconnectionDelay(
+          initialReconnectionDelay,
+        );
+
+        this.log.info(
+          // eslint-disable-next-line max-len
+          `BLE controller configured: autoReconnect=${autoReconnect}, maxAttempts=${maxReconnectionAttempts}, monitorInterval=${connectionMonitorInterval}s, initialDelay=${initialReconnectionDelay}ms`,
+        );
+
         // run the method to discover / register your devices as accessories
         await this.discoverDevices();
       } catch (error) {
-        this.log.error(`Failed to initialize BLE controller: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        this.log.error('Please make sure Bluetooth is enabled and you have the necessary permissions.');
+        this.log.error(
+          `Failed to initialize BLE controller: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
+        );
+        this.log.error(
+          'Please make sure Bluetooth is enabled and you have the necessary permissions.',
+        );
       }
     });
   }
@@ -105,10 +129,10 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
       const scanDuration = (this.config.scanDuration as number) || 10;
       const deviceFilter = (this.config.deviceFilter as string) || 'Schneider';
       const debug = (this.config.debug as boolean) || false;
-      
+
       // Clear the peripherals map before scanning
       this.peripheralsByAddress.clear();
-      
+
       if (debug) {
         this.log.debug('Configuration:', {
           scanDuration,
@@ -121,8 +145,11 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
       // Scan for BLE devices
       this.log.info(`Scanning for BLE devices for ${scanDuration} seconds...`);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const devices = (await (this.bleController.scanDevices as any)(scanDuration) as any[]);
-      
+      const devices = (await (this.bleController.scanDevices as any)(
+        scanDuration,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      )) as any[];
+
       if (devices.length === 0) {
         this.log.warn('No BLE devices found during scan');
         return;
@@ -131,12 +158,12 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
       this.log.info(`Found ${devices.length} BLE devices`);
 
       // Filter for Schneider BLE lamps based on configuration
-      const lampDevices = devices.filter(device => {
+      const lampDevices = devices.filter((device) => {
         const name = device.advertisement?.localName;
         if (!name) {
           return false;
         }
-        
+
         // Use the device filter from configuration (case-insensitive)
         return name.toLowerCase().includes(deviceFilter.toLowerCase());
       });
@@ -164,11 +191,15 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
         // generate a unique id for the accessory using the device address
         const uuid = this.api.hap.uuid.generate(device.address);
         this.log.debug(`Generated UUID for device ${device.address}: ${uuid}`);
-        
+
         // create a device object with the necessary information
         const deviceInfo = {
           uniqueId: device.address,
-          displayName: device.advertisement?.localName || `Schneider Lamp ${device.address.substring(device.address.length - 4)}`,
+          displayName:
+            device.advertisement?.localName ||
+            `Schneider Lamp ${device.address.substring(
+              device.address.length - 4,
+            )}`,
           // Store the device address in context for later use
           address: device.address,
           // Also store a copy directly in the context for easier access
@@ -180,18 +211,32 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
         // Debug: Log all cached accessories
         this.log.debug(`Total cached accessories: ${this.accessories.size}`);
         for (const [cachedUuid, cachedAccessory] of this.accessories) {
-          this.log.debug(`Cached accessory: UUID=${cachedUuid}, Name=${cachedAccessory.displayName}, Context=${JSON.stringify(cachedAccessory.context)}`);
+          this.log.debug(
+            `Cached accessory: UUID=${cachedUuid}, Name=${
+              cachedAccessory.displayName
+            }, Context=${JSON.stringify(cachedAccessory.context)}`,
+          );
         }
 
         // see if an accessory with the same uuid has already been registered and restored from
         // the cached devices we stored in the `configureAccessory` method above
         const existingAccessory = this.accessories.get(uuid);
-        this.log.debug(`Looking for existing accessory with UUID ${uuid}: ${existingAccessory ? 'FOUND' : 'NOT FOUND'}`);
+        this.log.debug(
+          `Looking for existing accessory with UUID ${uuid}: ${
+            existingAccessory ? 'FOUND' : 'NOT FOUND'
+          }`,
+        );
 
         if (existingAccessory) {
           // the accessory already exists
-          this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
-          this.log.debug('Existing accessory context before update:', JSON.stringify(existingAccessory.context, null, 2));
+          this.log.info(
+            'Restoring existing accessory from cache:',
+            existingAccessory.displayName,
+          );
+          this.log.debug(
+            'Existing accessory context before update:',
+            JSON.stringify(existingAccessory.context, null, 2),
+          );
 
           // update the accessory context with the current peripheral
           // Make sure to preserve the device address from the discovered device
@@ -202,8 +247,11 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
             address: device.address,
             deviceAddress: device.address,
           };
-          
-          this.log.debug('Existing accessory context after update:', JSON.stringify(existingAccessory.context, null, 2));
+
+          this.log.debug(
+            'Existing accessory context after update:',
+            JSON.stringify(existingAccessory.context, null, 2),
+          );
           this.api.updatePlatformAccessories([existingAccessory]);
 
           // create the accessory handler for the restored accessory
@@ -211,30 +259,43 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
         } else {
           // the accessory does not yet exist, so we need to create it
           this.log.info('Adding new accessory:', deviceInfo.displayName);
-          this.log.debug('Creating new accessory with device info:', deviceInfo);
+          this.log.debug(
+            'Creating new accessory with device info:',
+            deviceInfo,
+          );
 
           // create a new accessory
-          const accessory = new this.api.platformAccessory(deviceInfo.displayName, uuid);
+          const accessory = new this.api.platformAccessory(
+            deviceInfo.displayName,
+            uuid,
+          );
 
           // store a copy of the device object in the `accessory.context`
           // the `context` property can be used to store any data about the accessory you may need
           accessory.context.device = deviceInfo;
-          
-          this.log.debug('New accessory context:', JSON.stringify(accessory.context, null, 2));
+
+          this.log.debug(
+            'New accessory context:',
+            JSON.stringify(accessory.context, null, 2),
+          );
 
           // create the accessory handler for the newly create accessory
           new SchneiderBLELampsAccessory(this, accessory);
 
           // link the accessory to your platform
-          this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-          
+          this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [
+            accessory,
+          ]);
+
           // Add to our accessories map
           this.accessories.set(uuid, accessory);
         }
 
         // push into discoveredCacheUUIDs
         this.discoveredCacheUUIDs.push(uuid);
-        this.log.debug(`Added UUID ${uuid} to discoveredCacheUUIDs. Total discovered: ${this.discoveredCacheUUIDs.length}`);
+        this.log.debug(
+          `Added UUID ${uuid} to discoveredCacheUUIDs. Total discovered: ${this.discoveredCacheUUIDs.length}`,
+        );
       }
 
       // you can also deal with accessories from the cache which are no longer present by removing them from Homebridge
@@ -242,16 +303,27 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
       // from this cloud account, then this device will no longer be present in the device list but will still be in the Homebridge cache
       for (const [uuid, accessory] of this.accessories) {
         if (!this.discoveredCacheUUIDs.includes(uuid)) {
-          this.log.info('Removing existing accessory from cache:', accessory.displayName);
-          this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+          this.log.info(
+            'Removing existing accessory from cache:',
+            accessory.displayName,
+          );
+          this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [
+            accessory,
+          ]);
         }
       }
     } catch (error) {
-      this.log.error(`Error discovering devices: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      this.log.error(
+        `Error discovering devices: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      );
       if (error instanceof Error && error.stack) {
         this.log.error(`Error stack: ${error.stack}`);
       }
-      this.log.error('This error might be related to BLE initialization or device scanning.');
+      this.log.error(
+        'This error might be related to BLE initialization or device scanning.',
+      );
     }
   }
 
