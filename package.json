@@ -3,7 +3,6 @@
   "displayName": "Schneider BLE Lamps",
   "type": "module",
   "version": "3.0.0",
-  "private": true,
   "description": "Homebridge plugin for controlling Schneider BLE lamps.",
   "author": "Schneider",
   "license": "Apache-2.0",

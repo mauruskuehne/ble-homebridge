@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Logging } from 'homebridge';
 import noble from '@abandonware/noble';
 
@@ -77,7 +78,7 @@ export class BLEController {
    * @param duration - Scan duration in seconds
    * @returns Promise resolving to array of discovered peripherals
    */
-  public async scanDevices(duration: number = 5): Promise<any[]> {
+  public async scanDevices(): Promise<any[]> {
     return new Promise((resolve, reject) => {
       try {
         this.log.debug('Starting scanDevices method');
@@ -93,7 +94,6 @@ export class BLEController {
         this.log.debug(`Noble scanning: ${noble.scanning}`);
 
         const devices: any[] = [];
-        let scanTimeout: NodeJS.Timeout;
 
         const onScanStop = () => {
           this.log.debug('BLE scan stopped');
@@ -125,22 +125,6 @@ export class BLEController {
 
         const onScanStart = () => {
           this.log.info('Starting BLE device scan...');
-          scanTimeout = setTimeout(() => {
-            try {
-              noble.stopScanning();
-              noble.removeListener('discover', onDiscover);
-              noble.removeListener('scanStart', onScanStart);
-              noble.removeListener('scanStop', onScanStop);
-              this.log.info(`Scan completed. Found ${devices.length} devices.`);
-              resolve(devices);
-            } catch (error) {
-              this.log.error(`Error stopping scan: ${error instanceof Error ? error.message : 'Unknown error'}`);
-              if (error instanceof Error && error.stack) {
-                this.log.error(`Error stack: ${error.stack}`);
-              }
-              resolve(devices); // Return what we have so far
-            }
-          }, duration * 1000);
         };
 
         this.log.debug('Setting up event listeners...');
