@@ -44,7 +44,7 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
     this.CustomServices = new EveHomeKitTypes(this.api).Services;
     this.CustomCharacteristics = new EveHomeKitTypes(this.api).Characteristics;
 
-    // Initialize BLE controller
+    // Initialize BLE controller with configuration
     this.bleController = new BLEController(this.log);
 
     this.log.debug('Finished initializing platform:', this.config.name);
@@ -60,6 +60,19 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
         // Initialize BLE controller
         await this.bleController.init();
         this.log.info('BLE controller initialized successfully');
+        
+        // Configure BLE controller with user settings
+        const autoReconnect = (this.config.autoReconnect as boolean) ?? true;
+        const maxReconnectionAttempts = (this.config.maxReconnectionAttempts as number) ?? 10;
+        const connectionMonitorInterval = (this.config.connectionMonitorInterval as number) ?? 10;
+        const initialReconnectionDelay = (this.config.initialReconnectionDelay as number) ?? 1000;
+        
+        this.bleController.setAutoReconnect(autoReconnect);
+        this.bleController.setMaxReconnectionAttempts(maxReconnectionAttempts);
+        this.bleController.setConnectionMonitorInterval(connectionMonitorInterval);
+        this.bleController.setInitialReconnectionDelay(initialReconnectionDelay);
+        
+        this.log.info(`BLE controller configured: autoReconnect=${autoReconnect}, maxAttempts=${maxReconnectionAttempts}, monitorInterval=${connectionMonitorInterval}s, initialDelay=${initialReconnectionDelay}ms`);
         
         // run the method to discover / register your devices as accessories
         await this.discoverDevices();

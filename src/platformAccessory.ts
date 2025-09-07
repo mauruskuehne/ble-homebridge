@@ -123,11 +123,15 @@ export class SchneiderBLELampsAccessory {
       if (!this.platform.bleController.getIsConnected() ||
           this.platform.bleController.getPeripheral()?.address !== deviceAddress) {
         
+        // Enable auto-reconnection for this device
+        this.platform.bleController.setAutoReconnect(true);
+        
         // Connect to the peripheral
         await this.platform.bleController.connect(peripheral);
       }
     } catch (error) {
       this.platform.log.error(`Failed to connect to lamp: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw error; // Re-throw to allow retry logic in calling methods
     }
   }
 
@@ -136,55 +140,69 @@ export class SchneiderBLELampsAccessory {
    * These are sent when the user changes the state of an accessory, for example, turning on a Light bulb.
    */
   async setOn(value: CharacteristicValue) {
-    try {
-      const isOn = value as boolean;
-      
-      // Ensure we're connected to the device
-      // Try both possible locations for the device address
-      let deviceAddress = this.accessory.context.device?.address;
-      if (!deviceAddress) {
-        deviceAddress = this.accessory.context.device?.deviceAddress;
-      }
-      
-      if (!deviceAddress) {
-        this.platform.log.error('Device address not found in accessory context');
-        // Revert the state in HomeKit if there was an error
-        setTimeout(() => {
-          this.service.updateCharacteristic(this.platform.Characteristic.On, this.states.On);
-        }, 100);
-        return;
-      }
+    const maxRetries = 3;
+    let retryCount = 0;
+    
+    const attemptSetOn = async (): Promise<void> => {
+      try {
+        const isOn = value as boolean;
+        
+        // Ensure we're connected to the device
+        // Try both possible locations for the device address
+        let deviceAddress = this.accessory.context.device?.address;
+        if (!deviceAddress) {
+          deviceAddress = this.accessory.context.device?.deviceAddress;
+        }
+        
+        if (!deviceAddress) {
+          this.platform.log.error('Device address not found in accessory context');
+          // Revert the state in HomeKit if there was an error
+          setTimeout(() => {
+            this.service.updateCharacteristic(this.platform.Characteristic.On, this.states.On);
+          }, 100);
+          return;
+        }
 
-      if (!this.platform.bleController.getIsConnected() ||
-          this.platform.bleController.getPeripheral()?.address !== deviceAddress) {
-        await this.connectToDevice();
-      }
+        // Always try to ensure connection before sending commands
+        if (!this.platform.bleController.getIsConnected() ||
+            this.platform.bleController.getPeripheral()?.address !== deviceAddress) {
+          this.platform.log.debug('Not connected or connected to different device, attempting connection...');
+          await this.connectToDevice();
+        }
 
-      // Send the command to the device
-      let success = false;
-      if (isOn) {
-        success = await this.platform.bleController.turnLampOn();
-      } else {
-        success = await this.platform.bleController.turnLampOff();
-      }
+        // Send the command to the device
+        let success = false;
+        if (isOn) {
+          success = await this.platform.bleController.turnLampOn();
+        } else {
+          success = await this.platform.bleController.turnLampOff();
+        }
 
-      if (success) {
-        this.states.On = isOn;
-        this.platform.log.debug(`Set Characteristic On -> ${isOn} (successful)`);
-      } else {
-        this.platform.log.error(`Failed to set lamp state to ${isOn}`);
-        // Revert the state in HomeKit if the command failed
-        setTimeout(() => {
-          this.service.updateCharacteristic(this.platform.Characteristic.On, this.states.On);
-        }, 100);
+        if (success) {
+          this.states.On = isOn;
+          this.platform.log.debug(`Set Characteristic On -> ${isOn} (successful)`);
+        } else {
+          throw new Error(`Failed to set lamp state to ${isOn}`);
+        }
+      } catch (error) {
+        retryCount++;
+        this.platform.log.error(`Error in setOn (attempt ${retryCount}/${maxRetries}): ${error instanceof Error ? error.message : 'Unknown error'}`);
+        
+        if (retryCount < maxRetries) {
+          this.platform.log.info(`Retrying setOn operation in 1 second... (attempt ${retryCount + 1}/${maxRetries})`);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          return attemptSetOn();
+        } else {
+          this.platform.log.error(`Failed to set lamp state after ${maxRetries} attempts`);
+          // Revert the state in HomeKit if all attempts failed
+          setTimeout(() => {
+            this.service.updateCharacteristic(this.platform.Characteristic.On, this.states.On);
+          }, 100);
+        }
       }
-    } catch (error) {
-      this.platform.log.error(`Error in setOn: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      // Revert the state in HomeKit if there was an error
-      setTimeout(() => {
-        this.service.updateCharacteristic(this.platform.Characteristic.On, this.states.On);
-      }, 100);
-    }
+    };
+
+    await attemptSetOn();
   }
 
   /**

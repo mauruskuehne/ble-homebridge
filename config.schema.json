@@ -35,6 +35,33 @@
         "default": true,
         "description": "Automatically reconnect to disconnected devices"
       },
+      "maxReconnectionAttempts": {
+        "title": "Max Reconnection Attempts",
+        "type": "integer",
+        "required": false,
+        "default": 10,
+        "minimum": 1,
+        "maximum": 50,
+        "description": "Maximum number of reconnection attempts before giving up"
+      },
+      "connectionMonitorInterval": {
+        "title": "Connection Monitor Interval",
+        "type": "integer",
+        "required": false,
+        "default": 10,
+        "minimum": 5,
+        "maximum": 60,
+        "description": "Interval in seconds to check connection health"
+      },
+      "initialReconnectionDelay": {
+        "title": "Initial Reconnection Delay",
+        "type": "integer",
+        "required": false,
+        "default": 1000,
+        "minimum": 500,
+        "maximum": 10000,
+        "description": "Initial delay in milliseconds before first reconnection attempt"
+      },
       "debug": {
         "title": "Debug Logging",
         "type": "boolean",
@@ -52,8 +79,17 @@
         "name",
         "scanDuration",
         "deviceFilter",
-        "autoReconnect",
         "debug"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Connection Management",
+      "items": [
+        "autoReconnect",
+        "maxReconnectionAttempts",
+        "connectionMonitorInterval",
+        "initialReconnectionDelay"
       ]
     }
   ]

@@ -13,6 +13,15 @@ export class BLEController {
   private peripheral: any = null;
   private characteristics = new Map<string | number, any>();
   private selectedCharacteristic: any = null;
+  private targetPeripheral: any = null; // Store the target peripheral for reconnection
+  private reconnectionAttempts = 0;
+  private maxReconnectionAttempts = 10;
+  private reconnectionDelay = 1000; // Start with 1 second
+  private maxReconnectionDelay = 30000; // Max 30 seconds
+  private connectionMonitorInterval: NodeJS.Timeout | null = null;
+  private connectionMonitorIntervalMs = 10000; // Default 10 seconds
+  private isReconnecting = false;
+  private autoReconnectEnabled = true;
 
   constructor(log: Logging) {
     this.log = log;
@@ -226,15 +235,26 @@ export class BLEController {
         }`,
       );
 
+      // Store the target peripheral for reconnection
+      this.targetPeripheral = peripheral;
+      this.reconnectionAttempts = 0;
+
       const onConnect = async () => {
         this.isConnected = true;
         this.peripheral = peripheral;
+        this.isReconnecting = false;
+        this.reconnectionAttempts = 0;
+        this.reconnectionDelay = 1000; // Reset delay
         this.log.info(`Connected to device: ${peripheral.address}`);
         peripheral.removeListener('connect', onConnect);
 
         try {
           // Discover services and characteristics after connection
           await this.discoverServicesAndCharacteristics(peripheral);
+          
+          // Start connection monitoring
+          this.startConnectionMonitoring();
+          
           resolve();
         } catch (error) {
           this.log.error(
@@ -249,8 +269,17 @@ export class BLEController {
       const onDisconnect = () => {
         this.isConnected = false;
         this.peripheral = null;
-        this.log.info(`Disconnected from device: ${peripheral.address}`);
+        this.log.warn(`Disconnected from device: ${peripheral.address}`);
         peripheral.removeListener('disconnect', onDisconnect);
+        
+        // Stop connection monitoring
+        this.stopConnectionMonitoring();
+        
+        // Attempt automatic reconnection if enabled
+        if (this.autoReconnectEnabled && !this.isReconnecting) {
+          this.log.info('Attempting automatic reconnection...');
+          this.attemptReconnection();
+        }
       };
 
       peripheral.on('connect', onConnect);
@@ -378,11 +407,16 @@ export class BLEController {
    * Disconnect from the current peripheral
    */
   public async disconnect(): Promise<void> {
+    // Disable auto-reconnection when manually disconnecting
+    this.autoReconnectEnabled = false;
+    this.stopConnectionMonitoring();
+    
     if (this.peripheral && this.isConnected) {
       return new Promise((resolve) => {
         this.peripheral!.once('disconnect', () => {
           this.isConnected = false;
           this.peripheral = null;
+          this.targetPeripheral = null;
           this.selectedCharacteristic = null;
           this.characteristics.clear();
           this.log.info('Disconnected from device');
@@ -395,22 +429,186 @@ export class BLEController {
   }
 
   /**
-   * Write data to the selected characteristic
+   * Start connection monitoring to detect connection issues
+   */
+  private startConnectionMonitoring(): void {
+    this.stopConnectionMonitoring(); // Clear any existing monitor
+    
+    this.connectionMonitorInterval = setInterval(() => {
+      this.checkConnectionHealth();
+    }, this.connectionMonitorIntervalMs);
+    
+    this.log.debug(`Started connection monitoring (interval: ${this.connectionMonitorIntervalMs}ms)`);
+  }
+
+  /**
+   * Stop connection monitoring
+   */
+  private stopConnectionMonitoring(): void {
+    if (this.connectionMonitorInterval) {
+      clearInterval(this.connectionMonitorInterval);
+      this.connectionMonitorInterval = null;
+      this.log.debug('Stopped connection monitoring');
+    }
+  }
+
+  /**
+   * Check connection health and attempt reconnection if needed
+   */
+  private async checkConnectionHealth(): Promise<void> {
+    if (!this.isConnected || !this.peripheral) {
+      this.log.debug('Connection health check: Not connected');
+      if (this.autoReconnectEnabled && !this.isReconnecting) {
+        this.log.info('Connection lost detected, attempting reconnection...');
+        this.attemptReconnection();
+      }
+      return;
+    }
+
+    // Check if peripheral is still valid
+    if (this.peripheral.state !== 'connected') {
+      this.log.warn(`Connection health check failed: peripheral state is ${this.peripheral.state}`);
+      this.isConnected = false;
+      if (this.autoReconnectEnabled && !this.isReconnecting) {
+        this.log.info('Connection state mismatch detected, attempting reconnection...');
+        this.attemptReconnection();
+      }
+    } else {
+      this.log.debug('Connection health check: OK');
+    }
+  }
+
+  /**
+   * Attempt to reconnect to the target peripheral
+   */
+  private async attemptReconnection(): Promise<void> {
+    if (this.isReconnecting || !this.targetPeripheral || !this.autoReconnectEnabled) {
+      return;
+    }
+
+    this.isReconnecting = true;
+    this.reconnectionAttempts++;
+
+    if (this.reconnectionAttempts > this.maxReconnectionAttempts) {
+      this.log.error(`Max reconnection attempts (${this.maxReconnectionAttempts}) reached. Giving up.`);
+      this.isReconnecting = false;
+      return;
+    }
+
+    this.log.info(`Reconnection attempt ${this.reconnectionAttempts}/${this.maxReconnectionAttempts} in ${this.reconnectionDelay}ms...`);
+
+    // Wait before attempting reconnection
+    await new Promise(resolve => setTimeout(resolve, this.reconnectionDelay));
+
+    try {
+      // Try to reconnect to the target peripheral
+      await this.connect(this.targetPeripheral);
+      this.log.info('Reconnection successful!');
+    } catch (error) {
+      this.log.error(`Reconnection attempt ${this.reconnectionAttempts} failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      
+      // Exponential backoff with jitter
+      this.reconnectionDelay = Math.min(
+        this.reconnectionDelay * 2 + Math.random() * 1000,
+        this.maxReconnectionDelay,
+      );
+      
+      this.isReconnecting = false;
+      
+      // Schedule next attempt
+      setTimeout(() => {
+        if (this.autoReconnectEnabled && !this.isConnected) {
+          this.attemptReconnection();
+        }
+      }, 1000);
+    }
+  }
+
+  /**
+   * Enable or disable automatic reconnection
+   */
+  public setAutoReconnect(enabled: boolean): void {
+    this.autoReconnectEnabled = enabled;
+    this.log.info(`Auto-reconnection ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  /**
+   * Get current auto-reconnection status
+   */
+  public getAutoReconnectEnabled(): boolean {
+    return this.autoReconnectEnabled;
+  }
+
+  /**
+   * Set maximum reconnection attempts
+   */
+  public setMaxReconnectionAttempts(attempts: number): void {
+    this.maxReconnectionAttempts = Math.max(1, attempts);
+    this.log.info(`Max reconnection attempts set to: ${this.maxReconnectionAttempts}`);
+  }
+
+  /**
+   * Set connection monitor interval
+   */
+  public setConnectionMonitorInterval(intervalSeconds: number): void {
+    this.connectionMonitorIntervalMs = Math.max(5, intervalSeconds) * 1000;
+    
+    // If monitoring is active, restart it with new interval
+    if (this.connectionMonitorInterval) {
+      this.stopConnectionMonitoring();
+      this.startConnectionMonitoring();
+      this.log.info(`Connection monitor interval updated to: ${intervalSeconds} seconds`);
+    } else {
+      this.log.info(`Connection monitor interval set to: ${intervalSeconds} seconds (will apply on next connection)`);
+    }
+  }
+
+  /**
+   * Set initial reconnection delay
+   */
+  public setInitialReconnectionDelay(delayMs: number): void {
+    this.reconnectionDelay = Math.max(500, delayMs);
+    this.log.info(`Initial reconnection delay set to: ${this.reconnectionDelay}ms`);
+  }
+
+  /**
+   * Write data to the selected characteristic with retry logic
    * @param data - The data to write
    * @param operation - Description of the operation for logging
+   * @param retryCount - Current retry attempt (internal use)
    * @returns Promise resolving when write is complete
    */
   private async writeToSelectedCharacteristic(
     data: Buffer,
     operation: string,
+    retryCount = 0,
   ): Promise<boolean> {
-    if (!this.peripheral || !this.isConnected) {
-      this.log.error('Not connected to device, cannot write to characteristic');
-      return false;
+    const maxRetries = 3;
+    
+    // Check connection status first
+    if (!this.isConnected || !this.peripheral) {
+      this.log.warn(`${operation} - Not connected to device, attempting reconnection...`);
+      
+      if (this.autoReconnectEnabled && this.targetPeripheral && retryCount < maxRetries) {
+        try {
+          await this.attemptReconnection();
+          // Wait a bit for connection to stabilize
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          // Retry the write operation
+          return this.writeToSelectedCharacteristic(data, operation, retryCount + 1);
+        } catch (error) {
+          this.log.error(`Failed to reconnect for ${operation}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          return false;
+        }
+      } else {
+        this.log.error(`${operation} - Cannot write to characteristic: not connected and no reconnection possible`);
+        return false;
+      }
     }
 
     if (!this.selectedCharacteristic) {
-      this.log.error('No characteristic selected for lamp control');
+      this.log.error(`${operation} - No characteristic selected for lamp control`);
       return false;
     }
 
@@ -430,12 +628,34 @@ export class BLEController {
       }
 
       // Use writeWithoutResponse (false) as per the working script
-      char.write(data, false, (error: Error | null) => {
+      char.write(data, false, async (error: Error | null) => {
         if (error) {
           this.log.error(
             `Error writing to characteristic ${char.uuid}: ${error.message}`,
           );
-          resolve(false);
+          
+          // If write failed and we haven't exceeded retry limit, try to reconnect and retry
+          if (retryCount < maxRetries && this.autoReconnectEnabled && this.targetPeripheral) {
+            this.log.info(`${operation} - Retrying write operation (attempt ${retryCount + 1}/${maxRetries})...`);
+            
+            // Mark as disconnected to trigger reconnection
+            this.isConnected = false;
+            
+            try {
+              await this.attemptReconnection();
+              // Wait a bit for connection to stabilize
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              
+              // Retry the write operation
+              const retryResult = await this.writeToSelectedCharacteristic(data, operation, retryCount + 1);
+              resolve(retryResult);
+            } catch (reconnectError) {
+              this.log.error(`Failed to reconnect for retry: ${reconnectError instanceof Error ? reconnectError.message : 'Unknown error'}`);
+              resolve(false);
+            }
+          } else {
+            resolve(false);
+          }
         } else {
           this.log.info(`Successfully wrote to characteristic ${char.uuid}`);
           resolve(true);
