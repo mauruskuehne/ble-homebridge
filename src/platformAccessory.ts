@@ -24,14 +24,11 @@ export class SchneiderBLELampsAccessory {
     private readonly platform: SchneiderBLELampsPlatform,
     private readonly accessory: PlatformAccessory,
   ) {
-    // Get the peripheral from the accessory context
-    this.peripheral = this.accessory.context.device.peripheral;
-    
     // set accessory information
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
       .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Schneider Electric')
       .setCharacteristic(this.platform.Characteristic.Model, 'BLE Lamp')
-      .setCharacteristic(this.platform.Characteristic.SerialNumber, this.accessory.context.device.uniqueId);
+      .setCharacteristic(this.platform.Characteristic.SerialNumber, this.accessory.context.device.uniqueId || 'SCH-BLE-LAMP');
 
     // get the LightBulb service if it exists, otherwise create a new LightBulb service
     this.service = this.accessory.getService(this.platform.Service.Lightbulb) || this.accessory.addService(this.platform.Service.Lightbulb);
@@ -51,26 +48,31 @@ export class SchneiderBLELampsAccessory {
     this.service.getCharacteristic(this.platform.Characteristic.Brightness)
       .onSet(this.setBrightness.bind(this)); // SET - bind to the `setBrightness` method below
 
-    // Set up peripheral event handlers
-    this.setupPeripheralEventHandlers();
+    // Note: We don't set up peripheral event handlers in the constructor anymore
+    // Instead, we'll get the peripheral when we need to connect
   }
 
   /**
    * Set up peripheral event handlers
    */
-  private setupPeripheralEventHandlers(): void {
-    this.peripheral.on('connect', () => {
+  private setupPeripheralEventHandlers(peripheral: { address: string; on: (event: string, callback: () => void) => void }): void {
+    if (!peripheral) {
+      this.platform.log.error('Cannot set up event handlers: peripheral is undefined');
+      return;
+    }
+
+    this.peripheral = peripheral;
+
+    peripheral.on('connect', () => {
       this.isConnected = true;
       this.platform.log.info(`Connected to lamp: ${this.accessory.displayName}`);
     });
 
-    this.peripheral.on('disconnect', () => {
+    peripheral.on('disconnect', () => {
       this.isConnected = false;
+      this.peripheral = null;
       this.platform.log.info(`Disconnected from lamp: ${this.accessory.displayName}`);
     });
-
-    // Connect to the peripheral
-    this.connectToDevice();
   }
 
   /**
@@ -78,9 +80,27 @@ export class SchneiderBLELampsAccessory {
    */
   private async connectToDevice(): Promise<void> {
     try {
+      // Find the peripheral by address from the platform
+      const deviceAddress = this.accessory.context.device.address;
+      if (!deviceAddress) {
+        throw new Error('Device address not found in accessory context');
+      }
+
+      // Get the peripheral from the platform's peripheral map
+      const peripheral = this.platform.getPeripheralByAddress(deviceAddress) as { address: string; on: (event: string, callback: () => void) => void };
+      if (!peripheral) {
+        throw new Error(`Peripheral not found for address: ${deviceAddress}`);
+      }
+
+      // Set up event handlers for this peripheral
+      this.setupPeripheralEventHandlers(peripheral);
+
+      // Check if we're already connected to the right device
       if (!this.platform.bleController.getIsConnected() ||
-          this.platform.bleController.getPeripheral()?.address !== this.peripheral.address) {
-        await this.platform.bleController.connect(this.peripheral);
+          this.platform.bleController.getPeripheral()?.address !== deviceAddress) {
+        
+        // Connect to the peripheral
+        await this.platform.bleController.connect(peripheral);
       }
     } catch (error) {
       this.platform.log.error(`Failed to connect to lamp: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -96,8 +116,9 @@ export class SchneiderBLELampsAccessory {
       const isOn = value as boolean;
       
       // Ensure we're connected to the device
+      const deviceAddress = this.accessory.context.device.address;
       if (!this.platform.bleController.getIsConnected() ||
-          this.platform.bleController.getPeripheral()?.address !== this.peripheral.address) {
+          this.platform.bleController.getPeripheral()?.address !== deviceAddress) {
         await this.connectToDevice();
       }
 

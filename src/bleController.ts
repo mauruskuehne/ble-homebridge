@@ -23,27 +23,52 @@ export class BLEController {
    */
   public async init(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const onStateChange = (state: string) => {
-        this.log.debug(`BLE state changed to: ${state}`);
+      try {
+        this.log.debug('Starting BLE controller initialization');
         
-        if (state === 'poweredOn') {
-          this.log.info('BLE is powered on');
+        // Check if noble is available
+        if (typeof noble === 'undefined') {
+          this.log.error('Noble BLE library is not available');
+          reject(new Error('Noble BLE library is not available'));
+          return;
+        }
+
+        this.log.debug('Noble library is available');
+        this.log.debug(`Noble type: ${typeof noble}`);
+        this.log.debug(`Noble state: ${noble.state}`);
+        this.log.debug(`Noble scanning: ${noble.scanning}`);
+
+        const onStateChange = (state: string) => {
+          this.log.debug(`BLE state changed to: ${state}`);
+          
+          if (state === 'poweredOn') {
+            this.log.info('BLE is powered on');
+            noble.removeListener('stateChange', onStateChange);
+            resolve();
+          } else {
+            this.log.warn('BLE is not powered on');
+            noble.removeListener('stateChange', onStateChange);
+            reject(new Error('BLE not powered on'));
+          }
+        };
+
+        this.log.debug('Setting up state change event listener...');
+        noble.on('stateChange', onStateChange);
+        
+        // Check the current state in case it's already powered on
+        if (noble.state === 'poweredOn') {
+          this.log.info('BLE is already powered on');
           noble.removeListener('stateChange', onStateChange);
           resolve();
         } else {
-          this.log.warn('BLE is not powered on');
-          noble.removeListener('stateChange', onStateChange);
-          reject(new Error('BLE not powered on'));
+          this.log.debug(`BLE is not powered on yet, current state: ${noble.state}`);
         }
-      };
-
-      noble.on('stateChange', onStateChange);
-      
-      // Check the current state in case it's already powered on
-      if (noble.state === 'poweredOn') {
-        this.log.info('BLE is already powered on');
-        noble.removeListener('stateChange', onStateChange);
-        resolve();
+      } catch (error) {
+        this.log.error(`Error setting up BLE event listeners: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        if (error instanceof Error && error.stack) {
+          this.log.error(`Error stack: ${error.stack}`);
+        }
+        reject(error);
       }
     });
   }
@@ -55,35 +80,65 @@ export class BLEController {
    */
   public async scanDevices(duration: number = 5): Promise<any[]> {
     return new Promise((resolve, reject) => {
-      const devices: any[] = [];
-      let scanTimeout: NodeJS.Timeout;
+      try {
+        this.log.debug('Starting scanDevices method');
+        
+        if (typeof noble === 'undefined') {
+          this.log.error('Noble BLE library is not available');
+          reject(new Error('Noble BLE library is not available'));
+          return;
+        }
 
-      const onDiscover = (peripheral: any) => {
-        this.log.debug(`Discovered device: ${peripheral.address} - ${peripheral.advertisement?.localName || 'Unknown'}`);
-        devices.push(peripheral);
-      };
+        this.log.debug('Noble library is available, checking state...');
+        this.log.debug(`Noble state: ${noble.state}`);
+        this.log.debug(`Noble scanning: ${noble.scanning}`);
 
-      const onScanStart = () => {
-        this.log.info('Starting BLE device scan...');
-        scanTimeout = setTimeout(() => {
-          noble.stopScanning();
-          noble.removeListener('discover', onDiscover);
-          noble.removeListener('scanStart', onScanStart);
-          noble.removeListener('scanStop', onScanStop);
-          this.log.info(`Scan completed. Found ${devices.length} devices.`);
-          resolve(devices);
-        }, duration * 1000);
-      };
+        const devices: any[] = [];
+        let scanTimeout: NodeJS.Timeout;
 
-      const onScanStop = () => {
-        this.log.debug('BLE scan stopped');
-      };
+        const onDiscover = (peripheral: any) => {
+          this.log.debug(`Discovered device: ${peripheral.address} - ${peripheral.advertisement?.localName || 'Unknown'}`);
+          devices.push(peripheral);
+        };
 
-      noble.on('discover', onDiscover);
-      noble.on('scanStart', onScanStart);
-      noble.on('scanStop', onScanStop);
+        const onScanStart = () => {
+          this.log.info('Starting BLE device scan...');
+          scanTimeout = setTimeout(() => {
+            try {
+              noble.stopScanning();
+              noble.removeListener('discover', onDiscover);
+              noble.removeListener('scanStart', onScanStart);
+              noble.removeListener('scanStop', onScanStop);
+              this.log.info(`Scan completed. Found ${devices.length} devices.`);
+              resolve(devices);
+            } catch (error) {
+              this.log.error(`Error stopping scan: ${error instanceof Error ? error.message : 'Unknown error'}`);
+              if (error instanceof Error && error.stack) {
+                this.log.error(`Error stack: ${error.stack}`);
+              }
+              resolve(devices); // Return what we have so far
+            }
+          }, duration * 1000);
+        };
 
-      noble.startScanning([], false);
+        const onScanStop = () => {
+          this.log.debug('BLE scan stopped');
+        };
+
+        this.log.debug('Setting up event listeners...');
+        noble.on('discover', onDiscover);
+        noble.on('scanStart', onScanStart);
+        noble.on('scanStop', onScanStop);
+
+        this.log.debug('Starting scan...');
+        noble.startScanning([], false);
+      } catch (error) {
+        this.log.error(`Error in scanDevices: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        if (error instanceof Error && error.stack) {
+          this.log.error(`Error stack: ${error.stack}`);
+        }
+        reject(error);
+      }
     });
   }
 

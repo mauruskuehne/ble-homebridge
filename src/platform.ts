@@ -22,6 +22,9 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
   
   // BLE controller for handling device communication
   public readonly bleController: BLEController;
+  
+  // Map to store peripherals by address to avoid circular references
+  private readonly peripheralsByAddress: Map<string, unknown> = new Map();
 
   // This is only required when using Custom Services and Characteristics not support by HomeKit
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -62,6 +65,7 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
         await this.discoverDevices();
       } catch (error) {
         this.log.error(`Failed to initialize BLE controller: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        this.log.error('Please make sure Bluetooth is enabled and you have the necessary permissions.');
       }
     });
   }
@@ -89,6 +93,9 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
       const deviceFilter = (this.config.deviceFilter as string) || 'Schneider';
       const debug = (this.config.debug as boolean) || false;
       
+      // Clear the peripherals map before scanning
+      this.peripheralsByAddress.clear();
+      
       if (debug) {
         this.log.debug('Configuration:', {
           scanDuration,
@@ -111,7 +118,7 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
 
       // Filter for Schneider BLE lamps based on configuration
       const lampDevices = devices.filter(device => {
-        const name = device.advertisement.localName;
+        const name = device.advertisement?.localName;
         if (!name) {
           return false;
         }
@@ -119,6 +126,11 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
         // Use the device filter from configuration (case-insensitive)
         return name.toLowerCase().includes(deviceFilter.toLowerCase());
       });
+
+      // Store peripherals by address for later use
+      for (const device of lampDevices) {
+        this.peripheralsByAddress.set(device.address, device);
+      }
 
       if (lampDevices.length === 0) {
         this.log.warn('No Schneider BLE lamps found during scan');
@@ -135,8 +147,9 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
         // create a device object with the necessary information
         const deviceInfo = {
           uniqueId: device.address,
-          displayName: device.advertisement.localName || `Schneider Lamp ${device.address.substring(device.address.length - 4)}`,
-          peripheral: device,
+          displayName: device.advertisement?.localName || `Schneider Lamp ${device.address.substring(device.address.length - 4)}`,
+          // Don't store the peripheral object in context to avoid circular reference issues
+          address: device.address,
         };
 
         // see if an accessory with the same uuid has already been registered and restored from
@@ -186,6 +199,19 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
       }
     } catch (error) {
       this.log.error(`Error discovering devices: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      if (error instanceof Error && error.stack) {
+        this.log.error(`Error stack: ${error.stack}`);
+      }
+      this.log.error('This error might be related to BLE initialization or device scanning.');
     }
+  }
+
+  /**
+   * Get a peripheral by its address
+   * @param address - The BLE address of the peripheral
+   * @returns The peripheral object or undefined if not found
+   */
+  public getPeripheralByAddress(address: string): unknown {
+    return this.peripheralsByAddress.get(address);
   }
 }
