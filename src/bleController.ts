@@ -4,16 +4,15 @@ import noble from '@abandonware/noble';
 /**
  * BLE Controller for Schneider BLE Lamps
  * This class handles the BLE communication with the lamp devices
+ * Based on the working JavaScript implementation
  */
 export class BLEController {
   private readonly log: Logging;
   private isConnected = false;
   private peripheral: any = null;
+  private characteristics = new Map<string | number, any>();
+  private selectedCharacteristic: any = null;
   
-  // Lamp control handles from the Python script analysis
-  private readonly HANDLE_ON = 26;  // Handle for turning lamp ON
-  private readonly HANDLE_OFF = 26; // Handle for turning lamp OFF
-
   constructor(log: Logging) {
     this.log = log;
   }
@@ -170,12 +169,20 @@ export class BLEController {
     return new Promise((resolve, reject) => {
       this.log.info(`Connecting to device: ${peripheral.address} - ${peripheral.advertisement?.localName || 'Unknown'}`);
 
-      const onConnect = () => {
+      const onConnect = async () => {
         this.isConnected = true;
         this.peripheral = peripheral;
         this.log.info(`Connected to device: ${peripheral.address}`);
         peripheral.removeListener('connect', onConnect);
-        resolve();
+        
+        try {
+          // Discover services and characteristics after connection
+          await this.discoverServicesAndCharacteristics(peripheral);
+          resolve();
+        } catch (error) {
+          this.log.error(`Failed to discover services: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          reject(error);
+        }
       };
 
       const onDisconnect = () => {
@@ -198,6 +205,78 @@ export class BLEController {
   }
 
   /**
+   * Discover services and characteristics and store them for later use
+   * @param peripheral - The connected peripheral
+   */
+  private async discoverServicesAndCharacteristics(peripheral: any): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.log.debug('Discovering services and characteristics...');
+      
+      peripheral.discoverServices([], (error: Error | null, services: any[]) => {
+        if (error) {
+          this.log.error(`Error discovering services: ${error.message}`);
+          reject(error);
+          return;
+        }
+
+        this.log.info(`Discovered ${services.length} services`);
+        
+        // Clear previous characteristics
+        this.characteristics.clear();
+        
+        // Log all discovered services
+        services.forEach((service, index) => {
+          this.log.debug(`Service ${index}: UUID=${service.uuid}, Name=${service.name || 'Unknown'}`);
+        });
+
+        // Discover characteristics for each service
+        let pendingDiscoveries = services.length;
+        if (pendingDiscoveries === 0) {
+          resolve();
+          return;
+        }
+
+        services.forEach((service) => {
+          service.discoverCharacteristics([], (charError: Error | null, characteristics: any[]) => {
+            if (charError) {
+              this.log.error(`Error discovering characteristics for service ${service.uuid}: ${charError.message}`);
+            } else {
+              this.log.info(`Service ${service.uuid} has ${characteristics.length} characteristics`);
+              characteristics.forEach((char, charIndex) => {
+                this.log.debug(`  Characteristic ${charIndex}: UUID=${char.uuid}, Properties=[${char.properties.join(', ')}]`);
+                
+                // Store characteristic by handle or UUID for later use
+                const key = char.handle !== undefined ? char.handle : `uuid_${char.uuid}`;
+                this.characteristics.set(key, char);
+                
+                // Check if this is the lamp control characteristic we're looking for
+                if (char.uuid === 'b35d95c66a68437eabe70ebffd8e0661') {
+                  this.log.info(`*** FOUND LAMP CONTROL CHARACTERISTIC: ${char.uuid} ***`);
+                  this.log.info(`    Handle: ${char.handle}, Properties: [${char.properties.join(', ')}]`);
+                  // Automatically select this characteristic for lamp control
+                  this.selectedCharacteristic = char;
+                  this.log.info('Automatically selected lamp control characteristic');
+                }
+              });
+            }
+            
+            pendingDiscoveries--;
+            if (pendingDiscoveries === 0) {
+              this.log.info(`Discovery completed. Found ${this.characteristics.size} characteristics total.`);
+              if (this.selectedCharacteristic) {
+                this.log.info(`Lamp control characteristic selected: ${this.selectedCharacteristic.uuid}`);
+              } else {
+                this.log.warn('Lamp control characteristic not found automatically');
+              }
+              resolve();
+            }
+          });
+        });
+      });
+    });
+  }
+
+  /**
    * Disconnect from the current peripheral
    */
   public async disconnect(): Promise<void> {
@@ -206,6 +285,8 @@ export class BLEController {
         this.peripheral!.once('disconnect', () => {
           this.isConnected = false;
           this.peripheral = null;
+          this.selectedCharacteristic = null;
+          this.characteristics.clear();
           this.log.info('Disconnected from device');
           resolve();
         });
@@ -216,44 +297,43 @@ export class BLEController {
   }
 
   /**
-   * Write data to a specific handle
-   * @param handle - The handle to write to
+   * Write data to the selected characteristic
    * @param data - The data to write
+   * @param operation - Description of the operation for logging
    * @returns Promise resolving when write is complete
    */
-  private async writeToHandle(handle: number, data: Buffer): Promise<boolean> {
+  private async writeToSelectedCharacteristic(data: Buffer, operation: string): Promise<boolean> {
     if (!this.peripheral || !this.isConnected) {
-      this.log.error('Not connected to device, cannot write to handle');
+      this.log.error('Not connected to device, cannot write to characteristic');
       return false;
     }
 
-    return new Promise((resolve, reject) => {
-      this.log.debug(`Writing to handle 0x${handle.toString(16).padStart(4, '0')}: ${data.toString('hex')}`);
+    if (!this.selectedCharacteristic) {
+      this.log.error('No characteristic selected for lamp control');
+      return false;
+    }
 
-      // Add a timeout to prevent hanging
-      const timeout = setTimeout(() => {
-        this.log.error(`Timeout writing to handle 0x${handle.toString(16).padStart(4, '0')} after 5 seconds`);
-        reject(new Error('Write operation timed out'));
-      }, 5000);
+    return new Promise((resolve) => {
+      const char = this.selectedCharacteristic;
+      this.log.info(`${operation} - Writing to selected characteristic...`);
+      this.log.info(`Writing to characteristic ${char.uuid}: ${data.toString('hex')}`);
 
-      try {
-        this.peripheral!.writeHandle(handle, data, false, (error: Error | null) => {
-          clearTimeout(timeout);
-          
-          if (error) {
-            this.log.error(`Error writing to handle 0x${handle.toString(16).padStart(4, '0')}: ${error.message}`);
-            this.log.error('Error details:', error);
-            reject(error);
-          } else {
-            this.log.info(`Successfully wrote to handle 0x${handle.toString(16).padStart(4, '0')}`);
-            resolve(true);
-          }
-        });
-      } catch (syncError) {
-        clearTimeout(timeout);
-        this.log.error(`Synchronous error writing to handle 0x${handle.toString(16).padStart(4, '0')}: ${syncError instanceof Error ? syncError.message : 'Unknown error'}`);
-        reject(syncError);
+      if (!char.write) {
+        this.log.error(`Characteristic ${char.uuid} does not have write method`);
+        resolve(false);
+        return;
       }
+
+      // Use writeWithoutResponse (false) as per the working script
+      char.write(data, false, (error: Error | null) => {
+        if (error) {
+          this.log.error(`Error writing to characteristic ${char.uuid}: ${error.message}`);
+          resolve(false);
+        } else {
+          this.log.info(`Successfully wrote to characteristic ${char.uuid}`);
+          resolve(true);
+        }
+      });
     });
   }
 
@@ -264,8 +344,7 @@ export class BLEController {
   public async turnLampOn(): Promise<boolean> {
     this.log.info('Turning lamp ON...');
     try {
-      await this.writeToHandle(this.HANDLE_ON, Buffer.from([0x01]));
-      return true;
+      return await this.writeToSelectedCharacteristic(Buffer.from([0x01]), 'Turn lamp ON');
     } catch (error) {
       this.log.error(`Failed to turn lamp ON: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return false;
@@ -279,12 +358,44 @@ export class BLEController {
   public async turnLampOff(): Promise<boolean> {
     this.log.info('Turning lamp OFF...');
     try {
-      await this.writeToHandle(this.HANDLE_OFF, Buffer.from([0x00]));
-      return true;
+      return await this.writeToSelectedCharacteristic(Buffer.from([0x00]), 'Turn lamp OFF');
     } catch (error) {
       this.log.error(`Failed to turn lamp OFF: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return false;
     }
+  }
+
+  /**
+   * Set the selected characteristic for lamp control
+   * @param characteristicUuid - The UUID of the characteristic to use
+   * @returns true if characteristic was found and selected, false otherwise
+   */
+  public setLampControlCharacteristic(characteristicUuid: string): boolean {
+    for (const [, char] of this.characteristics) {
+      if (char.uuid === characteristicUuid) {
+        this.selectedCharacteristic = char;
+        this.log.info(`Selected characteristic for lamp control: ${char.uuid}`);
+        return true;
+      }
+    }
+    this.log.error(`Characteristic with UUID ${characteristicUuid} not found`);
+    return false;
+  }
+
+  /**
+   * Get all discovered characteristics
+   * @returns Map of characteristics
+   */
+  public getCharacteristics(): Map<string | number, any> {
+    return this.characteristics;
+  }
+
+  /**
+   * Get the currently selected characteristic
+   * @returns The selected characteristic or null
+   */
+  public getSelectedCharacteristic(): any {
+    return this.selectedCharacteristic;
   }
 
   /**
