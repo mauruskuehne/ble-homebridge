@@ -752,4 +752,53 @@ export class BLEController {
   public getPeripheral(): any {
     return this.peripheral;
   }
+
+  /**
+   * Read the current state of the lamp from the characteristic
+   * @returns Promise resolving to the lamp state (true for on, false for off, null if error)
+   */
+  public async readLampState(): Promise<boolean | null> {
+    this.log.info('Reading lamp state...');
+    
+    // Check connection status first
+    if (!this.isConnected || !this.peripheral) {
+      this.log.warn('Read lamp state - Not connected to device');
+      return null;
+    }
+
+    if (!this.selectedCharacteristic) {
+      this.log.error('Read lamp state - No characteristic selected for lamp control');
+      return null;
+    }
+
+    return new Promise((resolve) => {
+      const char = this.selectedCharacteristic;
+      this.log.info(`Reading from characteristic ${char.uuid}...`);
+
+      if (!char.read) {
+        this.log.error(`Characteristic ${char.uuid} does not have read method`);
+        resolve(null);
+        return;
+      }
+
+      char.read((error: Error | null, data: Buffer) => {
+        if (error) {
+          this.log.error(`Error reading from characteristic ${char.uuid}: ${error.message}`);
+          resolve(null);
+        } else {
+          this.log.info(`Successfully read from characteristic ${char.uuid}: ${data.toString('hex')}`);
+          
+          // Parse the data - assuming 0x01 means ON, 0x00 means OFF
+          if (data.length > 0) {
+            const isOn = data[0] === 0x01;
+            this.log.info(`Lamp state: ${isOn ? 'ON' : 'OFF'}`);
+            resolve(isOn);
+          } else {
+            this.log.error('Received empty data from characteristic');
+            resolve(null);
+          }
+        }
+      });
+    });
+  }
 }

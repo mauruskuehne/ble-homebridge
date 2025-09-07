@@ -221,15 +221,54 @@ export class SchneiderBLELampsAccessory {
    * this.service.updateCharacteristic(this.platform.Characteristic.On, true)
    */
   async getOn(): Promise<CharacteristicValue> {
-    // Return the cached state
-    const isOn = this.states.On;
+    try {
+      // Try to read the actual state from the device
+      // First ensure we're connected to the device
+      let deviceAddress = this.accessory.context.device?.address;
+      if (!deviceAddress) {
+        deviceAddress = this.accessory.context.device?.deviceAddress;
+      }
+      
+      if (!deviceAddress) {
+        this.platform.log.warn('Device address not found, returning cached state');
+        return this.states.On;
+      }
 
-    this.platform.log.debug('Get Characteristic On ->', isOn);
+      // Check if we're connected to the right device
+      if (!this.platform.bleController.getIsConnected() ||
+          this.platform.bleController.getPeripheral()?.address !== deviceAddress) {
+        this.platform.log.debug('Not connected to device, attempting connection for state read...');
+        try {
+          await this.connectToDevice();
+        } catch (error) {
+          this.platform.log.warn(`Failed to connect for state read: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          return this.states.On;
+        }
+      }
+
+      // Read the actual state from the characteristic
+      const actualState = await this.platform.bleController.readLampState();
+      
+      if (actualState !== null) {
+        // Update our cached state with the actual state
+        this.states.On = actualState;
+        this.platform.log.debug('Get Characteristic On -> (from device)', actualState);
+        return actualState;
+      } else {
+        // Fall back to cached state if read failed
+        this.platform.log.warn('Failed to read state from device, returning cached state');
+        this.platform.log.debug('Get Characteristic On -> (cached)', this.states.On);
+        return this.states.On;
+      }
+    } catch (error) {
+      // Fall back to cached state on any error
+      this.platform.log.error(`Error in getOn: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      this.platform.log.debug('Get Characteristic On -> (cached due to error)', this.states.On);
+      return this.states.On;
+    }
 
     // if you need to return an error to show the device as "Not Responding" in the Home app:
     // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-
-    return isOn;
   }
 
   /**
