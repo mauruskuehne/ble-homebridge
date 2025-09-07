@@ -6,7 +6,7 @@
 
 <span align="center">
 
-# Homebridge Platform Plugin Template
+# Schneider BLE Lamps Plugin
 
 </span>
 
@@ -23,9 +23,9 @@
 
 ---
 
-This is a template Homebridge dynamic platform plugin and can be used as a base to help you get started developing your own plugin.
+This is a Homebridge plugin for controlling Schneider BLE lamps. It allows you to integrate your Schneider BLE lamps with HomeKit, enabling you to control them using the Home app or Siri.
 
-This template should be used in conjunction with the [developer documentation](https://developers.homebridge.io/). A full list of all supported service types, and their characteristics is available on this site.
+This plugin should be used in conjunction with the [developer documentation](https://developers.homebridge.io/). A full list of all supported service types, and their characteristics is available on this site.
 
 ### Clone As Template
 
@@ -33,7 +33,7 @@ Click the link below to create a new GitHub Repository using this template, or c
 
 <span align="center">
 
-### [Create New Repository From Template](https://github.com/homebridge/homebridge-plugin-template/generate)
+### [Schneider BLE Lamps Plugin Repository](https://github.com/schneider/homebridge-schneider-ble-lamps)
 
 </span>
 
