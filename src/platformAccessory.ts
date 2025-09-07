@@ -9,12 +9,13 @@ import type { SchneiderBLELampsPlatform } from './platform.js';
  */
 export class SchneiderBLELampsAccessory {
   private service: Service;
+  private peripheral: any;
+  private isConnected = false;
 
   /**
-   * These are just used to create a working example
-   * You should implement your own code to track the state of your accessory
+   * Track the state of the accessory
    */
-  private exampleStates = {
+  private states = {
     On: false,
     Brightness: 100,
   };
@@ -23,26 +24,20 @@ export class SchneiderBLELampsAccessory {
     private readonly platform: SchneiderBLELampsPlatform,
     private readonly accessory: PlatformAccessory,
   ) {
+    // Get the peripheral from the accessory context
+    this.peripheral = this.accessory.context.device.peripheral;
+    
     // set accessory information
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
-      .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Default-Manufacturer')
-      .setCharacteristic(this.platform.Characteristic.Model, 'Default-Model')
-      .setCharacteristic(this.platform.Characteristic.SerialNumber, 'Default-Serial');
+      .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Schneider Electric')
+      .setCharacteristic(this.platform.Characteristic.Model, 'BLE Lamp')
+      .setCharacteristic(this.platform.Characteristic.SerialNumber, this.accessory.context.device.uniqueId);
 
     // get the LightBulb service if it exists, otherwise create a new LightBulb service
-    // you can create multiple services for each accessory
-
-    if (accessory.context.device.CustomService) {
-      // This is only required when using Custom Services and Characteristics not support by HomeKit
-      this.service = this.accessory.getService(this.platform.CustomServices[accessory.context.device.CustomService]) ||
-        this.accessory.addService(this.platform.CustomServices[accessory.context.device.CustomService]);
-    } else {
-      this.service = this.accessory.getService(this.platform.Service.Lightbulb) || this.accessory.addService(this.platform.Service.Lightbulb);
-    }
+    this.service = this.accessory.getService(this.platform.Service.Lightbulb) || this.accessory.addService(this.platform.Service.Lightbulb);
 
     // set the service name, this is what is displayed as the default name on the Home app
-    // in this example we are using the name we stored in the `accessory.context` in the `discoverDevices` method.
-    this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.exampleDisplayName);
+    this.service.setCharacteristic(this.platform.Characteristic.Name, this.accessory.context.device.displayName);
 
     // each service must implement at-minimum the "required characteristics" for the given service type
     // see https://developers.homebridge.io/#/service/Lightbulb
@@ -56,45 +51,40 @@ export class SchneiderBLELampsAccessory {
     this.service.getCharacteristic(this.platform.Characteristic.Brightness)
       .onSet(this.setBrightness.bind(this)); // SET - bind to the `setBrightness` method below
 
-    /**
-     * Creating multiple services of the same type.
-     *
-     * To avoid "Cannot add a Service with the same UUID another Service without also defining a unique 'subtype' property." error,
-     * when creating multiple services of the same type, you need to use the following syntax to specify a name and subtype id:
-     * this.accessory.getService('NAME') || this.accessory.addService(this.platform.Service.Lightbulb, 'NAME', 'USER_DEFINED_SUBTYPE_ID');
-     *
-     * The USER_DEFINED_SUBTYPE must be unique to the platform accessory (if you platform exposes multiple accessories, each accessory
-     * can use the same subtype id.)
-     */
+    // Set up peripheral event handlers
+    this.setupPeripheralEventHandlers();
+  }
 
-    // Example: add two "motion sensor" services to the accessory
-    const motionSensorOneService = this.accessory.getService('Motion Sensor One Name')
-      || this.accessory.addService(this.platform.Service.MotionSensor, 'Motion Sensor One Name', 'YourUniqueIdentifier-1');
+  /**
+   * Set up peripheral event handlers
+   */
+  private setupPeripheralEventHandlers(): void {
+    this.peripheral.on('connect', () => {
+      this.isConnected = true;
+      this.platform.log.info(`Connected to lamp: ${this.accessory.displayName}`);
+    });
 
-    const motionSensorTwoService = this.accessory.getService('Motion Sensor Two Name')
-      || this.accessory.addService(this.platform.Service.MotionSensor, 'Motion Sensor Two Name', 'YourUniqueIdentifier-2');
+    this.peripheral.on('disconnect', () => {
+      this.isConnected = false;
+      this.platform.log.info(`Disconnected from lamp: ${this.accessory.displayName}`);
+    });
 
-    /**
-     * Updating characteristics values asynchronously.
-     *
-     * Example showing how to update the state of a Characteristic asynchronously instead
-     * of using the `on('get')` handlers.
-     * Here we change update the motion sensor trigger states on and off every 10 seconds
-     * the `updateCharacteristic` method.
-     *
-     */
-    let motionDetected = false;
-    setInterval(() => {
-      // EXAMPLE - inverse the trigger
-      motionDetected = !motionDetected;
+    // Connect to the peripheral
+    this.connectToDevice();
+  }
 
-      // push the new value to HomeKit
-      motionSensorOneService.updateCharacteristic(this.platform.Characteristic.MotionDetected, motionDetected);
-      motionSensorTwoService.updateCharacteristic(this.platform.Characteristic.MotionDetected, !motionDetected);
-
-      this.platform.log.debug('Triggering motionSensorOneService:', motionDetected);
-      this.platform.log.debug('Triggering motionSensorTwoService:', !motionDetected);
-    }, 10000);
+  /**
+   * Connect to the BLE device
+   */
+  private async connectToDevice(): Promise<void> {
+    try {
+      if (!this.platform.bleController.getIsConnected() ||
+          this.platform.bleController.getPeripheral()?.address !== this.peripheral.address) {
+        await this.platform.bleController.connect(this.peripheral);
+      }
+    } catch (error) {
+      this.platform.log.error(`Failed to connect to lamp: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
   /**
@@ -102,10 +92,40 @@ export class SchneiderBLELampsAccessory {
    * These are sent when the user changes the state of an accessory, for example, turning on a Light bulb.
    */
   async setOn(value: CharacteristicValue) {
-    // implement your own code to turn your device on/off
-    this.exampleStates.On = value as boolean;
+    try {
+      const isOn = value as boolean;
+      
+      // Ensure we're connected to the device
+      if (!this.platform.bleController.getIsConnected() ||
+          this.platform.bleController.getPeripheral()?.address !== this.peripheral.address) {
+        await this.connectToDevice();
+      }
 
-    this.platform.log.debug('Set Characteristic On ->', value);
+      // Send the command to the device
+      let success = false;
+      if (isOn) {
+        success = await this.platform.bleController.turnLampOn();
+      } else {
+        success = await this.platform.bleController.turnLampOff();
+      }
+
+      if (success) {
+        this.states.On = isOn;
+        this.platform.log.debug(`Set Characteristic On -> ${isOn} (successful)`);
+      } else {
+        this.platform.log.error(`Failed to set lamp state to ${isOn}`);
+        // Revert the state in HomeKit if the command failed
+        setTimeout(() => {
+          this.service.updateCharacteristic(this.platform.Characteristic.On, this.states.On);
+        }, 100);
+      }
+    } catch (error) {
+      this.platform.log.error(`Error in setOn: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Revert the state in HomeKit if there was an error
+      setTimeout(() => {
+        this.service.updateCharacteristic(this.platform.Characteristic.On, this.states.On);
+      }, 100);
+    }
   }
 
   /**
@@ -124,8 +144,8 @@ export class SchneiderBLELampsAccessory {
    * this.service.updateCharacteristic(this.platform.Characteristic.On, true)
    */
   async getOn(): Promise<CharacteristicValue> {
-    // implement your own code to check if the device is on
-    const isOn = this.exampleStates.On;
+    // Return the cached state
+    const isOn = this.states.On;
 
     this.platform.log.debug('Get Characteristic On ->', isOn);
 
@@ -140,9 +160,11 @@ export class SchneiderBLELampsAccessory {
    * These are sent when the user changes the state of an accessory, for example, changing the Brightness
    */
   async setBrightness(value: CharacteristicValue) {
-    // implement your own code to set the brightness
-    this.exampleStates.Brightness = value as number;
+    // Note: The Python script doesn't include brightness control functionality
+    // This is a placeholder implementation that just stores the value
+    this.states.Brightness = value as number;
 
     this.platform.log.debug('Set Characteristic Brightness -> ', value);
+    this.platform.log.warn('Brightness control is not implemented for this device');
   }
 }

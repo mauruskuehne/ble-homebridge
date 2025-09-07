@@ -11,7 +11,50 @@
         "type": "string",
         "required": true,
         "default": "Schneider BLE Lamps"
+      },
+      "scanDuration": {
+        "title": "BLE Scan Duration",
+        "type": "integer",
+        "required": false,
+        "default": 10,
+        "minimum": 5,
+        "maximum": 60,
+        "description": "Duration in seconds to scan for BLE devices"
+      },
+      "deviceFilter": {
+        "title": "Device Name Filter",
+        "type": "string",
+        "required": false,
+        "default": "Schneider",
+        "description": "Filter BLE devices by name (case-insensitive)"
+      },
+      "autoReconnect": {
+        "title": "Auto Reconnect",
+        "type": "boolean",
+        "required": false,
+        "default": true,
+        "description": "Automatically reconnect to disconnected devices"
+      },
+      "debug": {
+        "title": "Debug Logging",
+        "type": "boolean",
+        "required": false,
+        "default": false,
+        "description": "Enable debug logging for troubleshooting"
       }
     }
-  }
+  },
+  "layout": [
+    {
+      "type": "fieldset",
+      "title": "General Settings",
+      "items": [
+        "name",
+        "scanDuration",
+        "deviceFilter",
+        "autoReconnect",
+        "debug"
+      ]
+    }
+  ]
 }
