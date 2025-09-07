@@ -107,7 +107,8 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
 
       // Scan for BLE devices
       this.log.info(`Scanning for BLE devices for ${scanDuration} seconds...`);
-      const devices = await this.bleController.scanDevices();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const devices = await (this.bleController.scanDevices as any)(scanDuration);
       
       if (devices.length === 0) {
         this.log.warn('No BLE devices found during scan');
