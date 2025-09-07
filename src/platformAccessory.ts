@@ -8,8 +8,8 @@ import type { SchneiderBLELampsPlatform } from './platform.js';
  * Each accessory may expose multiple services of different service types.
  */
 export class SchneiderBLELampsAccessory {
-  private service: Service;
-  private peripheral: any;
+  private service!: Service;
+  private peripheral: unknown;
   private isConnected = false;
 
   /**
@@ -29,6 +29,23 @@ export class SchneiderBLELampsAccessory {
       .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Schneider Electric')
       .setCharacteristic(this.platform.Characteristic.Model, 'BLE Lamp')
       .setCharacteristic(this.platform.Characteristic.SerialNumber, this.accessory.context.device.uniqueId || 'SCH-BLE-LAMP');
+
+    // Debug: Log the accessory context to verify device information
+    this.platform.log.debug('Accessory context:', JSON.stringify(this.accessory.context, null, 2));
+    
+    // Verify that device information is properly stored
+    if (!this.accessory.context.device) {
+      this.platform.log.error('Device information not found in accessory context');
+      return;
+    }
+    
+    if (!this.accessory.context.device.address && !this.accessory.context.device.deviceAddress) {
+      this.platform.log.error('Device address not found in accessory context');
+      this.platform.log.debug('Available device context properties:', Object.keys(this.accessory.context.device));
+    } else {
+      this.platform.log.debug('Device address found in accessory context:',
+        this.accessory.context.device.address || this.accessory.context.device.deviceAddress);
+    }
 
     // get the LightBulb service if it exists, otherwise create a new LightBulb service
     this.service = this.accessory.getService(this.platform.Service.Lightbulb) || this.accessory.addService(this.platform.Service.Lightbulb);
@@ -81,10 +98,17 @@ export class SchneiderBLELampsAccessory {
   private async connectToDevice(): Promise<void> {
     try {
       // Find the peripheral by address from the platform
-      const deviceAddress = this.accessory.context.device.address;
+      // Try both possible locations for the device address
+      let deviceAddress = this.accessory.context.device?.address;
+      if (!deviceAddress) {
+        deviceAddress = this.accessory.context.device?.deviceAddress;
+      }
+      
       if (!deviceAddress) {
         throw new Error('Device address not found in accessory context');
       }
+
+      this.platform.log.debug(`Retrieved device address: ${deviceAddress}`);
 
       // Get the peripheral from the platform's peripheral map
       const peripheral = this.platform.getPeripheralByAddress(deviceAddress) as { address: string; on: (event: string, callback: () => void) => void };
@@ -116,7 +140,21 @@ export class SchneiderBLELampsAccessory {
       const isOn = value as boolean;
       
       // Ensure we're connected to the device
-      const deviceAddress = this.accessory.context.device.address;
+      // Try both possible locations for the device address
+      let deviceAddress = this.accessory.context.device?.address;
+      if (!deviceAddress) {
+        deviceAddress = this.accessory.context.device?.deviceAddress;
+      }
+      
+      if (!deviceAddress) {
+        this.platform.log.error('Device address not found in accessory context');
+        // Revert the state in HomeKit if there was an error
+        setTimeout(() => {
+          this.service.updateCharacteristic(this.platform.Characteristic.On, this.states.On);
+        }, 100);
+        return;
+      }
+
       if (!this.platform.bleController.getIsConnected() ||
           this.platform.bleController.getPeripheral()?.address !== deviceAddress) {
         await this.connectToDevice();

@@ -141,27 +141,55 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
 
       // loop over the discovered devices and register each one if it has not already been registered
       for (const device of lampDevices) {
+        this.log.debug('Processing discovered device:', {
+          address: device.address,
+          localName: device.advertisement?.localName,
+          rssi: device.rssi,
+        });
+
         // generate a unique id for the accessory using the device address
         const uuid = this.api.hap.uuid.generate(device.address);
+        this.log.debug(`Generated UUID for device ${device.address}: ${uuid}`);
         
         // create a device object with the necessary information
         const deviceInfo = {
           uniqueId: device.address,
           displayName: device.advertisement?.localName || `Schneider Lamp ${device.address.substring(device.address.length - 4)}`,
-          // Don't store the peripheral object in context to avoid circular reference issues
+          // Store the device address in context for later use
           address: device.address,
+          // Also store a copy directly in the context for easier access
+          deviceAddress: device.address,
         };
+
+        this.log.debug('Created device info:', deviceInfo);
+
+        // Debug: Log all cached accessories
+        this.log.debug(`Total cached accessories: ${this.accessories.size}`);
+        for (const [cachedUuid, cachedAccessory] of this.accessories) {
+          this.log.debug(`Cached accessory: UUID=${cachedUuid}, Name=${cachedAccessory.displayName}, Context=${JSON.stringify(cachedAccessory.context)}`);
+        }
 
         // see if an accessory with the same uuid has already been registered and restored from
         // the cached devices we stored in the `configureAccessory` method above
         const existingAccessory = this.accessories.get(uuid);
+        this.log.debug(`Looking for existing accessory with UUID ${uuid}: ${existingAccessory ? 'FOUND' : 'NOT FOUND'}`);
 
         if (existingAccessory) {
           // the accessory already exists
           this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
+          this.log.debug('Existing accessory context before update:', JSON.stringify(existingAccessory.context, null, 2));
 
           // update the accessory context with the current peripheral
-          existingAccessory.context.device = deviceInfo;
+          // Make sure to preserve the device address from the discovered device
+          existingAccessory.context.device = {
+            ...existingAccessory.context.device,
+            ...deviceInfo,
+            // Ensure the address is properly set from the discovered device
+            address: device.address,
+            deviceAddress: device.address,
+          };
+          
+          this.log.debug('Existing accessory context after update:', JSON.stringify(existingAccessory.context, null, 2));
           this.api.updatePlatformAccessories([existingAccessory]);
 
           // create the accessory handler for the restored accessory
@@ -169,6 +197,7 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
         } else {
           // the accessory does not yet exist, so we need to create it
           this.log.info('Adding new accessory:', deviceInfo.displayName);
+          this.log.debug('Creating new accessory with device info:', deviceInfo);
 
           // create a new accessory
           const accessory = new this.api.platformAccessory(deviceInfo.displayName, uuid);
@@ -176,16 +205,22 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
           // store a copy of the device object in the `accessory.context`
           // the `context` property can be used to store any data about the accessory you may need
           accessory.context.device = deviceInfo;
+          
+          this.log.debug('New accessory context:', JSON.stringify(accessory.context, null, 2));
 
           // create the accessory handler for the newly create accessory
           new SchneiderBLELampsAccessory(this, accessory);
 
           // link the accessory to your platform
           this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+          
+          // Add to our accessories map
+          this.accessories.set(uuid, accessory);
         }
 
         // push into discoveredCacheUUIDs
         this.discoveredCacheUUIDs.push(uuid);
+        this.log.debug(`Added UUID ${uuid} to discoveredCacheUUIDs. Total discovered: ${this.discoveredCacheUUIDs.length}`);
       }
 
       // you can also deal with accessories from the cache which are no longer present by removing them from Homebridge

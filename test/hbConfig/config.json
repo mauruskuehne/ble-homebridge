@@ -23,8 +23,11 @@
       "debug": false
     },
     {
-      "name": "homebridge-plugin-name",
-      "platform": "ExampleHomebridgePlugin"
+      "name": "Schneider BLE Lamps",
+      "platform": "SchneiderBLELamps",
+      "scanDuration": 10,
+      "deviceFilter": "Masterbad",
+      "debug": true
     }
   ],
   "accessories": []

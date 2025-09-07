@@ -11,7 +11,7 @@ export class BLEController {
   private peripheral: any = null;
   
   // Lamp control handles from the Python script analysis
-  private readonly HANDLE_ON = 21;  // Handle for turning lamp ON
+  private readonly HANDLE_ON = 26;  // Handle for turning lamp ON
   private readonly HANDLE_OFF = 26; // Handle for turning lamp OFF
 
   constructor(log: Logging) {
@@ -96,8 +96,31 @@ export class BLEController {
         const devices: any[] = [];
         let scanTimeout: NodeJS.Timeout;
 
+        const onScanStop = () => {
+          this.log.debug('BLE scan stopped');
+        };
+
         const onDiscover = (peripheral: any) => {
-          this.log.debug(`Discovered device: ${peripheral.address} - ${peripheral.advertisement?.localName || 'Unknown'}`);
+          // Use id, uuid, or address - whichever is available
+          const deviceId = peripheral.address || peripheral.id || peripheral.uuid || 'unknown';
+          this.log.debug(`Discovered device: ${deviceId} - ${peripheral.advertisement?.localName || 'Unknown'}`);
+          this.log.debug('Full peripheral object:', {
+            id: peripheral.id,
+            uuid: peripheral.uuid,
+            address: peripheral.address,
+            addressType: peripheral.addressType,
+            connectable: peripheral.connectable,
+            advertisement: peripheral.advertisement,
+            rssi: peripheral.rssi,
+            state: peripheral.state,
+          });
+          
+          // Ensure the peripheral has a consistent address property
+          if (!peripheral.address && (peripheral.id || peripheral.uuid)) {
+            peripheral.address = peripheral.id || peripheral.uuid;
+            this.log.debug(`Set peripheral address to: ${peripheral.address}`);
+          }
+          
           devices.push(peripheral);
         };
 
@@ -119,10 +142,6 @@ export class BLEController {
               resolve(devices); // Return what we have so far
             }
           }, duration * 1000);
-        };
-
-        const onScanStop = () => {
-          this.log.debug('BLE scan stopped');
         };
 
         this.log.debug('Setting up event listeners...');
@@ -211,15 +230,30 @@ export class BLEController {
     return new Promise((resolve, reject) => {
       this.log.debug(`Writing to handle 0x${handle.toString(16).padStart(4, '0')}: ${data.toString('hex')}`);
 
-      this.peripheral!.writeHandle(handle, data, false, (error: Error | null) => {
-        if (error) {
-          this.log.error(`Error writing to handle 0x${handle.toString(16).padStart(4, '0')}: ${error.message}`);
-          reject(error);
-        } else {
-          this.log.debug(`Successfully wrote to handle 0x${handle.toString(16).padStart(4, '0')}`);
-          resolve(true);
-        }
-      });
+      // Add a timeout to prevent hanging
+      const timeout = setTimeout(() => {
+        this.log.error(`Timeout writing to handle 0x${handle.toString(16).padStart(4, '0')} after 5 seconds`);
+        reject(new Error('Write operation timed out'));
+      }, 5000);
+
+      try {
+        this.peripheral!.writeHandle(handle, data, false, (error: Error | null) => {
+          clearTimeout(timeout);
+          
+          if (error) {
+            this.log.error(`Error writing to handle 0x${handle.toString(16).padStart(4, '0')}: ${error.message}`);
+            this.log.error('Error details:', error);
+            reject(error);
+          } else {
+            this.log.info(`Successfully wrote to handle 0x${handle.toString(16).padStart(4, '0')}`);
+            resolve(true);
+          }
+        });
+      } catch (syncError) {
+        clearTimeout(timeout);
+        this.log.error(`Synchronous error writing to handle 0x${handle.toString(16).padStart(4, '0')}: ${syncError instanceof Error ? syncError.message : 'Unknown error'}`);
+        reject(syncError);
+      }
     });
   }
 
