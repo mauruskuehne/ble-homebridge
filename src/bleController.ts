@@ -24,6 +24,7 @@ export class BLEController {
   private autoReconnectEnabled = true;
   private isConnecting = false; // Track if we're currently connecting to prevent duplicate connections
   private pendingConnection: { resolve: (value?: void) => void; reject: (reason?: any) => void } | null = null; // Track pending connection
+  // eslint-disable-next-line max-len
   private connectionQueue: Array<{ address: string; deviceName?: string; resolve: (value?: void) => void; reject: (reason?: any) => void }> = []; // Connection queue
 
   constructor(log: Logging) {
