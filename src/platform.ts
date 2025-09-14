@@ -62,14 +62,14 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
       log.debug('Executed didFinishLaunching callback');
 
       try {
-        // Initialize BLE controller
+        // Initialize BLE controller (but don't scan for devices)
         await this.bleController.init();
         this.log.info('BLE controller initialized successfully');
 
         // Configure BLE controller with user settings
-        const autoReconnect = (this.config.autoReconnect as boolean) ?? true;
+        const autoReconnect = (this.config.autoReconnect as boolean) ?? false; // Default to false since we connect/disconnect per operation
         const maxReconnectionAttempts =
-          (this.config.maxReconnectionAttempts as number) ?? 10;
+          (this.config.maxReconnectionAttempts as number) ?? 3; // Reduce default attempts
         const connectionMonitorInterval =
           (this.config.connectionMonitorInterval as number) ?? 10;
         const initialReconnectionDelay =

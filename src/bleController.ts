@@ -22,6 +22,9 @@ export class BLEController {
   private connectionMonitorIntervalMs = 10000; // Default 10 seconds
   private isReconnecting = false;
   private autoReconnectEnabled = true;
+  private isConnecting = false; // Track if we're currently connecting to prevent duplicate connections
+  private pendingConnection: { resolve: (value?: void) => void; reject: (reason?: any) => void } | null = null; // Track pending connection
+  private connectionQueue: Array<{ address: string; deviceName?: string; resolve: (value?: void) => void; reject: (reason?: any) => void }> = []; // Connection queue
 
   constructor(log: Logging) {
     this.log = log;
@@ -95,12 +98,37 @@ export class BLEController {
    * @returns Promise resolving when connected
    */
   public async connectByAddress(address: string, deviceName?: string): Promise<void> {
+    // Check if we're already connected to this device
+    if (this.isConnected && this.peripheral && this.peripheral.address === address) {
+      this.log.debug(`Already connected to device: ${address}`);
+      return;
+    }
+
+    // If we're already connecting, add to queue
+    if (this.isConnecting) {
+      this.log.debug(`Already connecting to device, adding to queue: ${address}`);
+      return new Promise((resolve, reject) => {
+        this.connectionQueue.push({ address, deviceName, resolve, reject });
+      });
+    }
+
+    // Process the connection
+    return this.processConnection(address, deviceName);
+  }
+
+  /**
+   * Process a connection request
+   */
+  private async processConnection(address: string, deviceName?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
         this.log.info(`Connecting to device by address: ${address}${deviceName ? ` (${deviceName})` : ''}`);
+        this.isConnecting = true;
+        this.pendingConnection = { resolve, reject };
 
         if (typeof noble === 'undefined') {
           this.log.error('Noble BLE library is not available');
+          this.cleanupConnection();
           reject(new Error('Noble BLE library is not available'));
           return;
         }
@@ -125,6 +153,7 @@ export class BLEController {
           if (!isResolved) {
             isResolved = true;
             cleanup();
+            this.cleanupConnection();
             if (result instanceof Error) {
               reject(result);
             } else {
@@ -167,7 +196,6 @@ export class BLEController {
           }
         };
 
-
         this.log.debug('Setting up event listeners for address-based connection...');
         noble.on('discover', onDiscover);
 
@@ -179,9 +207,38 @@ export class BLEController {
             error instanceof Error ? error.message : 'Unknown error'
           }`,
         );
+        this.cleanupConnection();
         reject(error);
       }
     });
+  }
+
+  /**
+   * Process the next connection in the queue
+   */
+  private processNextConnection(): void {
+    if (this.connectionQueue.length > 0 && !this.isConnecting) {
+      const nextConnection = this.connectionQueue.shift();
+      if (nextConnection) {
+        this.log.debug(`Processing next connection in queue: ${nextConnection.address}`);
+        this.processConnection(nextConnection.address, nextConnection.deviceName)
+          .then(nextConnection.resolve)
+          .catch(nextConnection.reject);
+      }
+    }
+  }
+
+  /**
+   * Clean up connection state
+   */
+  private cleanupConnection(): void {
+    this.isConnecting = false;
+    this.pendingConnection = null;
+    
+    // Process the next connection in the queue
+    setTimeout(() => {
+      this.processNextConnection();
+    }, 100); // Small delay to ensure proper cleanup
   }
 
   /**
@@ -205,6 +262,7 @@ export class BLEController {
         this.isConnected = true;
         this.peripheral = peripheral;
         this.isReconnecting = false;
+        this.isConnecting = false; // Clear connecting state
         this.reconnectionAttempts = 0;
         this.reconnectionDelay = 1000; // Reset delay
         this.log.info(`Connected to device: ${peripheral.address}`);
@@ -231,6 +289,7 @@ export class BLEController {
       const onDisconnect = () => {
         this.isConnected = false;
         this.peripheral = null;
+        this.isConnecting = false; // Clear connecting state
         this.log.warn(`Disconnected from device: ${peripheral.address}`);
         peripheral.removeListener('disconnect', onDisconnect);
         
@@ -250,6 +309,7 @@ export class BLEController {
       peripheral.connect((error: Error | null) => {
         if (error) {
           this.log.error(`Failed to connect to device: ${error.message}`);
+          this.isConnecting = false; // Clear connecting state on error
           reject(error);
         }
       });
@@ -372,6 +432,9 @@ export class BLEController {
     // Disable auto-reconnection when manually disconnecting
     this.autoReconnectEnabled = false;
     this.stopConnectionMonitoring();
+    
+    // Clear the connection queue
+    this.connectionQueue = [];
     
     if (this.peripheral && this.isConnected) {
       return new Promise((resolve) => {

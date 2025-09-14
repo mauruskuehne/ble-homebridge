@@ -109,20 +109,30 @@ export class SchneiderBLELampsAccessory {
 
       this.platform.log.debug(`Retrieved device address: ${deviceAddress}`);
 
-      // Check if we're already connected to the right device
-      if (!this.platform.bleController.getIsConnected() ||
-          this.platform.bleController.getPeripheral()?.address !== deviceAddress) {
-        
-        // Enable auto-reconnection for this device
-        this.platform.bleController.setAutoReconnect(true);
-        
-        // Connect directly to the device by address
-        const deviceName = this.accessory.context.device?.displayName;
-        await this.platform.bleController.connectByAddress(deviceAddress, deviceName);
-      }
+      // Disable auto-reconnection since we'll connect/disconnect for each operation
+      this.platform.bleController.setAutoReconnect(false);
+      
+      // Connect directly to the device by address
+      const deviceName = this.accessory.context.device?.displayName;
+      await this.platform.bleController.connectByAddress(deviceAddress, deviceName);
     } catch (error) {
       this.platform.log.error(`Failed to connect to lamp: ${error instanceof Error ? error.message : 'Unknown error'}`);
       throw error; // Re-throw to allow retry logic in calling methods
+    }
+  }
+
+  /**
+   * Disconnect from the BLE device
+   */
+  private async disconnectFromDevice(): Promise<void> {
+    try {
+      if (this.platform.bleController.getIsConnected()) {
+        this.platform.log.debug('Disconnecting from device after operation');
+        await this.platform.bleController.disconnect();
+      }
+    } catch (error) {
+      this.platform.log.warn(`Failed to disconnect from lamp: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Don't throw here as disconnection failures shouldn't fail the main operation
     }
   }
 
@@ -135,6 +145,7 @@ export class SchneiderBLELampsAccessory {
     let retryCount = 0;
     
     const attemptSetOn = async (): Promise<void> => {
+      let connected = false;
       try {
         const isOn = value as boolean;
         
@@ -154,12 +165,10 @@ export class SchneiderBLELampsAccessory {
           return;
         }
 
-        // Always try to ensure connection before sending commands
-        if (!this.platform.bleController.getIsConnected() ||
-            this.platform.bleController.getPeripheral()?.address !== deviceAddress) {
-          this.platform.log.debug('Not connected or connected to different device, attempting connection...');
-          await this.connectToDevice();
-        }
+        // Connect to the device
+        this.platform.log.debug('Connecting to device for set operation...');
+        await this.connectToDevice();
+        connected = true;
 
         // Send the command to the device
         let success = false;
@@ -190,6 +199,11 @@ export class SchneiderBLELampsAccessory {
             this.service.updateCharacteristic(this.platform.Characteristic.On, this.states.On);
           }, 100);
         }
+      } finally {
+        // Always disconnect after the operation
+        if (connected) {
+          await this.disconnectFromDevice();
+        }
       }
     };
 
@@ -212,6 +226,7 @@ export class SchneiderBLELampsAccessory {
    * this.service.updateCharacteristic(this.platform.Characteristic.On, true)
    */
   async getOn(): Promise<CharacteristicValue> {
+    let connected = false;
     try {
       // Try to read the actual state from the device
       // First ensure we're connected to the device
@@ -225,17 +240,10 @@ export class SchneiderBLELampsAccessory {
         return this.states.On;
       }
 
-      // Check if we're connected to the right device
-      if (!this.platform.bleController.getIsConnected() ||
-          this.platform.bleController.getPeripheral()?.address !== deviceAddress) {
-        this.platform.log.debug('Not connected to device, attempting connection for state read...');
-        try {
-          await this.connectToDevice();
-        } catch (error) {
-          this.platform.log.warn(`Failed to connect for state read: ${error instanceof Error ? error.message : 'Unknown error'}`);
-          return this.states.On;
-        }
-      }
+      // Connect to the device
+      this.platform.log.debug('Connecting to device for get operation...');
+      await this.connectToDevice();
+      connected = true;
 
       // Read the actual state from the characteristic
       const actualState = await this.platform.bleController.readLampState();
@@ -256,6 +264,11 @@ export class SchneiderBLELampsAccessory {
       this.platform.log.error(`Error in getOn: ${error instanceof Error ? error.message : 'Unknown error'}`);
       this.platform.log.debug('Get Characteristic On -> (cached due to error)', this.states.On);
       return this.states.On;
+    } finally {
+      // Always disconnect after the operation
+      if (connected) {
+        await this.disconnectFromDevice();
+      }
     }
 
     // if you need to return an error to show the device as "Not Responding" in the Home app:
