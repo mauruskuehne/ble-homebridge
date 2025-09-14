@@ -12,21 +12,29 @@
         "required": true,
         "default": "Schneider BLE Lamps"
       },
-      "scanDuration": {
-        "title": "BLE Scan Duration",
-        "type": "integer",
-        "required": false,
-        "default": 10,
-        "minimum": 5,
-        "maximum": 60,
-        "description": "Duration in seconds to scan for BLE devices"
-      },
-      "deviceFilter": {
-        "title": "Device Name Filter",
-        "type": "string",
-        "required": false,
-        "default": "Schneider",
-        "description": "Filter BLE devices by name (case-insensitive)"
+      "devices": {
+        "title": "BLE Devices",
+        "type": "array",
+        "required": true,
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "title": "Device Name",
+              "type": "string",
+              "required": true,
+              "description": "Display name for the device in HomeKit"
+            },
+            "address": {
+              "title": "BLE Address",
+              "type": "string",
+              "required": true,
+              "pattern": "^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$",
+              "description": "BLE MAC address of the device (e.g., AA:BB:CC:DD:EE:FF)"
+            }
+          }
+        },
+        "description": "List of BLE lamp devices to control"
       },
       "autoReconnect": {
         "title": "Auto Reconnect",
@@ -77,9 +85,23 @@
       "title": "General Settings",
       "items": [
         "name",
-        "scanDuration",
-        "deviceFilter",
         "debug"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "BLE Devices",
+      "items": [
+        {
+          "key": "devices",
+          "type": "array",
+          "orderable": false,
+          "buttonText": "Add Device",
+          "items": [
+            "devices[].name",
+            "devices[].address"
+          ]
+        }
       ]
     },
     {

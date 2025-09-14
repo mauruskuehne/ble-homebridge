@@ -89,18 +89,15 @@ export class BLEController {
   }
 
   /**
-   * Scan for BLE devices
-   * @param duration - Scan duration in seconds (default: 10)
-   * @param deviceFilter - Optional filter to stop scanning when matching device is found
-   * @returns Promise resolving to array of discovered peripherals
+   * Connect to a device by its BLE address
+   * @param address - The BLE address to connect to
+   * @param deviceName - Optional device name for logging
+   * @returns Promise resolving when connected
    */
-  public async scanDevices(
-    duration: number = 10,
-    deviceFilter?: string,
-  ): Promise<any[]> {
+  public async connectByAddress(address: string, deviceName?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        this.log.debug('Starting scanDevices method');
+        this.log.info(`Connecting to device by address: ${address}${deviceName ? ` (${deviceName})` : ''}`);
 
         if (typeof noble === 'undefined') {
           this.log.error('Noble BLE library is not available');
@@ -108,115 +105,80 @@ export class BLEController {
           return;
         }
 
-        this.log.debug('Noble library is available, checking state...');
-        this.log.debug(`Noble state: ${noble.state}`);
-        this.log.debug(`Noble scanning: ${noble.scanning}`);
-
-        const devices: any[] = [];
         let isResolved = false;
+        // eslint-disable-next-line prefer-const
         let scanTimeout: NodeJS.Timeout;
-
-        const onScanStop = () => {
-          this.log.debug('BLE scan stopped');
-        };
-
-        const onScanStart = () => {
-          this.log.info('Starting BLE device scan...');
-        };
-
-        let onDiscover: undefined | ((result: any[]) => void) = undefined;
 
         const cleanup = () => {
           if (scanTimeout) {
             clearTimeout(scanTimeout);
           }
-          if (onDiscover) {
-            noble.removeListener('discover', onDiscover);
-          }
-          noble.removeListener('scanStart', onScanStart);
-          noble.removeListener('scanStop', onScanStop);
           if (noble.scanning) {
             noble.stopScanning();
           }
+          noble.removeAllListeners('discover');
+          noble.removeAllListeners('scanStart');
+          noble.removeAllListeners('scanStop');
         };
 
-        const resolveOnce = (result: any[]) => {
+        const resolveOnce = (result?: any) => {
           if (!isResolved) {
             isResolved = true;
             cleanup();
-            resolve(result);
-          }
-        };
-
-        onDiscover = (peripheral: any) => {
-          // Use id, uuid, or address - whichever is available
-          const deviceId =
-            peripheral.address || peripheral.id || peripheral.uuid || 'unknown';
-          this.log.debug(
-            `Discovered device: ${deviceId} - ${
-              peripheral.advertisement?.localName || 'Unknown'
-            }`,
-          );
-          this.log.debug('Full peripheral object:', {
-            id: peripheral.id,
-            uuid: peripheral.uuid,
-            address: peripheral.address,
-            addressType: peripheral.addressType,
-            connectable: peripheral.connectable,
-            advertisement: peripheral.advertisement,
-            rssi: peripheral.rssi,
-            state: peripheral.state,
-          });
-
-          // Ensure the peripheral has a consistent address property
-          if (!peripheral.address && (peripheral.id || peripheral.uuid)) {
-            peripheral.address = peripheral.id || peripheral.uuid;
-            this.log.debug(`Set peripheral address to: ${peripheral.address}`);
-          }
-
-          devices.push(peripheral);
-
-          // Check if this device matches the filter and stop scanning if it does
-          if (deviceFilter && peripheral.advertisement?.localName) {
-            const name = peripheral.advertisement.localName;
-            if (name.toLowerCase().includes(deviceFilter.toLowerCase())) {
-              this.log.info(
-                `Found matching device: ${name} - stopping scan early`,
-              );
-              resolveOnce(devices);
-              return;
+            if (result instanceof Error) {
+              reject(result);
+            } else {
+              resolve(result);
             }
           }
         };
 
-        // Set up timeout to stop scanning after duration
+        // Set up timeout to stop scanning if device not found
         scanTimeout = setTimeout(() => {
-          this.log.info(`Scan duration of ${duration} seconds completed`);
-          resolveOnce(devices);
-        }, duration * 1000);
+          this.log.error(`Device with address ${address} not found within scan timeout`);
+          resolveOnce(new Error(`Device with address ${address} not found`));
+        }, 30000); // 30 second timeout
 
-        this.log.debug('Setting up event listeners...');
+        const onDiscover = async (peripheral: any) => {
+          // Normalize address format for comparison
+          const peripheralAddress = peripheral.address || peripheral.id || peripheral.uuid;
+          const normalizedPeripheralAddress = peripheralAddress?.toLowerCase().replace(/[:-]/g, '');
+          const normalizedTargetAddress = address.toLowerCase().replace(/[:-]/g, '');
+
+          this.log.debug(`Discovered device: ${peripheralAddress} - ${peripheral.advertisement?.localName || 'Unknown'}`);
+
+          if (normalizedPeripheralAddress === normalizedTargetAddress) {
+            this.log.info(`Found target device: ${peripheralAddress}`);
+
+            // Ensure the peripheral has the correct address format
+            if (!peripheral.address && (peripheral.id || peripheral.uuid)) {
+              peripheral.address = peripheral.id || peripheral.uuid;
+            }
+
+            // Stop scanning and connect
+            cleanup();
+            
+            try {
+              await this.connect(peripheral);
+              resolveOnce();
+            } catch (error) {
+              resolveOnce(error);
+            }
+          }
+        };
+
+
+        this.log.debug('Setting up event listeners for address-based connection...');
         noble.on('discover', onDiscover);
-        noble.on('scanStart', onScanStart);
-        noble.on('scanStop', onScanStop);
 
-        // Set up timeout to stop scanning after duration
-        scanTimeout = setTimeout(() => {
-          this.log.info(`Scan duration of ${duration} seconds completed`);
-          resolveOnce(devices);
-        }, duration * 1000);
-
-        this.log.debug('Starting scan...');
+        this.log.debug('Starting scan to find target device...');
         noble.startScanning([], false);
       } catch (error) {
         this.log.error(
-          `Error in scanDevices: ${
+          `Error in connectByAddress: ${
             error instanceof Error ? error.message : 'Unknown error'
           }`,
         );
-        if (error instanceof Error && error.stack) {
-          this.log.error(`Error stack: ${error.stack}`);
-        }
         reject(error);
       }
     });

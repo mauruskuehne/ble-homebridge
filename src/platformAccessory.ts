@@ -97,8 +97,7 @@ export class SchneiderBLELampsAccessory {
    */
   private async connectToDevice(): Promise<void> {
     try {
-      // Find the peripheral by address from the platform
-      // Try both possible locations for the device address
+      // Get device address from accessory context
       let deviceAddress = this.accessory.context.device?.address;
       if (!deviceAddress) {
         deviceAddress = this.accessory.context.device?.deviceAddress;
@@ -110,15 +109,6 @@ export class SchneiderBLELampsAccessory {
 
       this.platform.log.debug(`Retrieved device address: ${deviceAddress}`);
 
-      // Get the peripheral from the platform's peripheral map
-      const peripheral = this.platform.getPeripheralByAddress(deviceAddress) as { address: string; on: (event: string, callback: () => void) => void };
-      if (!peripheral) {
-        throw new Error(`Peripheral not found for address: ${deviceAddress}`);
-      }
-
-      // Set up event handlers for this peripheral
-      this.setupPeripheralEventHandlers(peripheral);
-
       // Check if we're already connected to the right device
       if (!this.platform.bleController.getIsConnected() ||
           this.platform.bleController.getPeripheral()?.address !== deviceAddress) {
@@ -126,8 +116,9 @@ export class SchneiderBLELampsAccessory {
         // Enable auto-reconnection for this device
         this.platform.bleController.setAutoReconnect(true);
         
-        // Connect to the peripheral
-        await this.platform.bleController.connect(peripheral);
+        // Connect directly to the device by address
+        const deviceName = this.accessory.context.device?.displayName;
+        await this.platform.bleController.connectByAddress(deviceAddress, deviceName);
       }
     } catch (error) {
       this.platform.log.error(`Failed to connect to lamp: ${error instanceof Error ? error.message : 'Unknown error'}`);

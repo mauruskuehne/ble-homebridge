@@ -31,9 +31,6 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
   // BLE controller for handling device communication
   public readonly bleController: BLEController;
 
-  // Map to store peripherals by address to avoid circular references
-  private readonly peripheralsByAddress: Map<string, unknown> = new Map();
-
   // This is only required when using Custom Services and Characteristics not support by HomeKit
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public readonly CustomServices: any;
@@ -92,8 +89,8 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
           `BLE controller configured: autoReconnect=${autoReconnect}, maxAttempts=${maxReconnectionAttempts}, monitorInterval=${connectionMonitorInterval}s, initialDelay=${initialReconnectionDelay}ms`,
         );
 
-        // run the method to discover / register your devices as accessories
-        await this.discoverDevices();
+        // run the method to register configured devices as accessories
+        await this.registerConfiguredDevices();
       } catch (error) {
         this.log.error(
           `Failed to initialize BLE controller: ${
@@ -119,91 +116,56 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
   }
 
   /**
-   * This is an example method showing how to register discovered accessories.
+   * Register configured devices as accessories.
    * Accessories must only be registered once, previously created accessories
    * must not be registered again to prevent "duplicate UUID" errors.
    */
-  async discoverDevices() {
+  async registerConfiguredDevices() {
     try {
       // Get configuration options
-      const scanDuration = (this.config.scanDuration as number) || 10;
-      const deviceFilter = (this.config.deviceFilter as string) || 'Schneider';
       const debug = (this.config.debug as boolean) || false;
-
-      // Clear the peripherals map before scanning
-      this.peripheralsByAddress.clear();
+      const devices = (this.config.devices as Array<{name: string; address: string}>) || [];
 
       if (debug) {
         this.log.debug('Configuration:', {
-          scanDuration,
-          deviceFilter,
+          deviceCount: devices.length,
           autoReconnect: this.config.autoReconnect,
           debug,
         });
       }
 
-      // Scan for BLE devices
-      this.log.info(`Scanning for BLE devices for ${scanDuration} seconds...`);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const devices = (await (this.bleController.scanDevices as any)(
-        scanDuration,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      )) as any[];
-
       if (devices.length === 0) {
-        this.log.warn('No BLE devices found during scan');
+        this.log.warn('No devices configured. Please add device addresses to the configuration.');
         return;
       }
 
-      this.log.info(`Found ${devices.length} BLE devices`);
+      this.log.info(`Registering ${devices.length} configured BLE devices`);
 
-      // Filter for Schneider BLE lamps based on configuration
-      const lampDevices = devices.filter((device) => {
-        const name = device.advertisement?.localName;
-        if (!name) {
-          return false;
-        }
-
-        // Use the device filter from configuration (case-insensitive)
-        return name.toLowerCase().includes(deviceFilter.toLowerCase());
-      });
-
-      // Store peripherals by address for later use
-      for (const device of lampDevices) {
-        this.peripheralsByAddress.set(device.address, device);
-      }
-
-      if (lampDevices.length === 0) {
-        this.log.warn('No Schneider BLE lamps found during scan');
-        return;
-      }
-
-      this.log.info(`Found ${lampDevices.length} Schneider BLE lamps`);
-
-      // loop over the discovered devices and register each one if it has not already been registered
-      for (const device of lampDevices) {
-        this.log.debug('Processing discovered device:', {
-          address: device.address,
-          localName: device.advertisement?.localName,
-          rssi: device.rssi,
+      // loop over the configured devices and register each one if it has not already been registered
+      for (const configDevice of devices) {
+        this.log.debug('Processing configured device:', {
+          name: configDevice.name,
+          address: configDevice.address,
         });
 
+        // Validate device configuration
+        if (!configDevice.address || !configDevice.name) {
+          this.log.error('Invalid device configuration - missing name or address:', configDevice);
+          continue;
+        }
+
         // generate a unique id for the accessory using the device address
-        const uuid = this.api.hap.uuid.generate(device.address);
-        this.log.debug(`Generated UUID for device ${device.address}: ${uuid}`);
+        const uuid = this.api.hap.uuid.generate(configDevice.address);
+        this.log.debug(`Generated UUID for device ${configDevice.address}: ${uuid}`);
 
         // create a device object with the necessary information
         const deviceInfo = {
-          uniqueId: device.address,
-          displayName:
-            device.advertisement?.localName ||
-            `Schneider Lamp ${device.address.substring(
-              device.address.length - 4,
-            )}`,
+          uniqueId: configDevice.address,
+          displayName: configDevice.name,
           // Store the device address in context for later use
-          address: device.address,
+          address: configDevice.address,
           // Also store a copy directly in the context for easier access
-          deviceAddress: device.address,
+          deviceAddress: configDevice.address,
         };
 
         this.log.debug('Created device info:', deviceInfo);
@@ -238,14 +200,10 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
             JSON.stringify(existingAccessory.context, null, 2),
           );
 
-          // update the accessory context with the current peripheral
-          // Make sure to preserve the device address from the discovered device
+          // update the accessory context with the current device info
           existingAccessory.context.device = {
             ...existingAccessory.context.device,
             ...deviceInfo,
-            // Ensure the address is properly set from the discovered device
-            address: device.address,
-            deviceAddress: device.address,
           };
 
           this.log.debug(
@@ -298,13 +256,11 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
         );
       }
 
-      // you can also deal with accessories from the cache which are no longer present by removing them from Homebridge
-      // for example, if your plugin logs into a cloud account to retrieve a device list, and a user has previously removed a device
-      // from this cloud account, then this device will no longer be present in the device list but will still be in the Homebridge cache
+      // Remove accessories that are no longer in the configuration
       for (const [uuid, accessory] of this.accessories) {
         if (!this.discoveredCacheUUIDs.includes(uuid)) {
           this.log.info(
-            'Removing existing accessory from cache:',
+            'Removing existing accessory from cache (no longer in configuration):',
             accessory.displayName,
           );
           this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [
@@ -314,25 +270,13 @@ export class SchneiderBLELampsPlatform implements DynamicPlatformPlugin {
       }
     } catch (error) {
       this.log.error(
-        `Error discovering devices: ${
+        `Error registering configured devices: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`,
       );
       if (error instanceof Error && error.stack) {
         this.log.error(`Error stack: ${error.stack}`);
       }
-      this.log.error(
-        'This error might be related to BLE initialization or device scanning.',
-      );
     }
-  }
-
-  /**
-   * Get a peripheral by its address
-   * @param address - The BLE address of the peripheral
-   * @returns The peripheral object or undefined if not found
-   */
-  public getPeripheralByAddress(address: string): unknown {
-    return this.peripheralsByAddress.get(address);
   }
 }
